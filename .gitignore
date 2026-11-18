@@ -22,3 +22,9 @@ build-rain/work/test/test9*
 build-rain/work/**/t11
 build-rain/logs/
 build-rain/apps/
+# A05s port: local files, not part of the repo
+*.ipsw
+device-tree.dtb
+device-tree.dts
+rootfs/
+research/ipsw-x/
