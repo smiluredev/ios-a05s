@@ -1,0 +1,24 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -473,6 +473,21 @@
+ 	PE_parse_boot_argn("ufsroot", want, sizeof(want));
+ 
+ 	su.regs = ml_io_map(reg[0], reg[1]);
++	/*
++	 * Sanity: is this really a UFSHCI controller? The A05s device tree
++	 * points /sweet-ufs at an SDHCI/eMMC controller (0x4744000), not a
++	 * UFS controller. UFSHCI VER (0x08) is 0x0000MmPP: bits 31-16 zero,
++	 * major 1-4 in bits 15-8. On SDHCI, offset 0x08 is Argument 1, which
++	 * has no such invariant.
++	 */
++	{
++		uint32_t ver = *(volatile uint32_t *)((uintptr_t)su.regs + 0x08);
++		uint32_t major = (ver >> 8) & 0xff;
++		if ((ver & 0xffff0000) != 0 || major < 1 || major > 4) {
++			printf("SWEET UFS: not a UFSHCI (ver=0x%08x), skipping storage\n", ver);
++			return ENXIO;
++		}
++	}
+ 	if (kmem_alloc_contig(kernel_map, &su.dma, DMA_SIZE, PAGE_MASK, 0, 0,
+ 	    KMA_DATA | KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
+ 		printf("SWEET UFS: no contiguous DMA memory\n");
