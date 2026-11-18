@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Build the minimal Apple Device Tree that the TOPAZ xnu needs to boot.
+"""Build the minimal Apple Device Tree that the A05S xnu needs to boot.
 
 Only what the early boot path actually reads (see NOTES.md); every MMIO
-address comes from the topaz (Redmi Note 12 4G, SM6225 khaje) live FDT. Usage:  mkadt.py OUT.adt [--dump] [--qemu] [--highmem]
+address comes from the Galaxy A05s (SM-A057F, SM6225 khaje) live FDT. Usage:  mkadt.py OUT.adt [--dump] [--qemu] [--highmem] [--midmem] [--native]
 """
 import hashlib, os, struct, sys
 
@@ -12,10 +12,9 @@ import adt  # noqa: E402
 # Kernel-managed RAM: above every Qualcomm XPU carve-out (see NOTES.md)
 PHYS_BASE = 0xb0000000
 MEM_SIZE = 0x4d000000
-# --highmem (phone only): the whole upper DDR bank. The topaz live FDT memory
-# node is <0x40000000 0x3bb00000>, <0x80000000 3G>, <0x1_40000000 4G>; every
-# fixed reserved-memory carve-out is below 0x63900000 and the dynamic pools are
-# limited below 4G.
+# --highmem (phone only): the whole upper DDR bank. The khaje family's live FDT
+# memory node (A05s 6 GB) is filled by the ABL at boot; the fixed reserved-memory
+# carve-outs are all below 0x63900000 and the dynamic pools are limited below 4G.
 HIGH_PHYS_BASE = 0x140000000
 HIGH_MEM_SIZE = 0x100000000
 # --midmem (phone only): the middle and upper banks as one range, 0x80000000 +
@@ -27,14 +26,23 @@ MID_MEM_SIZE = int(__import__("os").environ.get("MIDSIZE", "0x1c0000000"), 16)
 SOC_BASE = 0x01000000
 
 # interrupt-controller@f200000 (redistributor-stride 0x20000, 8 cores)
+# Confirmed identical to rain/topaz: reg = <0xf200000 0x10000 0xf300000 0x100000>
 GICD, GICD_SIZE = 0x0f200000, 0x10000
 GICR, GICR_SIZE = 0x0f300000, 0x100000
-# cont_splash_region left lit by ABL
+# cont_splash_region left lit by ABL (identical to rain/topaz)
 FB, FB_SIZE = 0x5c000000, 0xf00000
 SWEET_ECID = 0x544f50415a000001  # 'TOPAZ' + 1, synthetic
-FB_W, FB_H, FB_STRIDE = 720, 1650, 720 * 4  # rain (Redmi 10C); topaz was 1080x2400
-# Internal UFS host (ufshc@4804000 "ufs_mem"); QEMU virt has none
-UFS, UFS_SIZE = 0x04804000, 0x3000
+# A05s panel: hx83112f_txd_fhd_90hz_video, 1080x2400 @ 90 Hz with DSC
+FB_W, FB_H, FB_STRIDE = 1080, 2400, 1080 * 4
+# A05s storage: eMMC via SDHCI (qcom,sdhci-msm-v5), NOT UFS.
+# The real controller has three regions:
+#   reg = <0x4744000 0x1000 0x4745000 0x1000 0x4748000 0x8000>;
+#   reg-names = "hc", "cqhci", "cqhci_ice";
+# We expose only the main "hc" region for the initial boot. The kernel-side
+# driver (sweet_ufs.c) currently matches "qcom,ufshc" and will need a port
+# to SDHCI before storage actually works; for now the boot will panic here
+# (which is expected and proves everything up to storage init works).
+UFS, UFS_SIZE = 0x04744000, 0x1000
 TIMEBASE = 19200000
 VTIMER_INTID = 19
 # QEMU virt (-M virt,gic-version=3 -cpu cortex-a76): GICD/GICR and the generic timer's CNTFRQ
@@ -128,11 +136,11 @@ def build(seed=None, qemu=False, highmem=False, native=False, midmem=False):
         # with CSR_ALLOW_UNRESTRICTED_FS (vm_unix.c shared region checks).
         node('asmb', [ph(), ('lp-sip0', u64(0x6f)), ('lp-sip1', u32(1))])])
 
-    # TOPAZ SMP: only the four Cortex-A73 (gold) cores, MPIDR 0x100-0x103:
-    # the Kryo 260 Silver cores have no 16K granule, so the shim boots xnu
-    # on gold CPU 0x100 and parks the silver cluster. One cluster. The kernel defaults to one
-    # and uses cpus=N to select an initial prefix (N <= 8).
-    # QEMU retains its original single-CPU tree: its MPIDRs differ from sweet.
+    # Khaje SMP: only the four Cortex-A73 (gold) cores, MPIDR 0x100-0x103:
+    # the Kryo 265 Silver cores have no 16K granule, so the shim boots xnu
+    # on gold CPU 0x100 and parks the silver cluster. One cluster. The kernel
+    # defaults to one and uses cpus=N to select an initial prefix (N <= 8).
+    # QEMU retains its original single-CPU tree: its MPIDRs differ from khaje.
     cpu_nodes = []
     for core in range(1 if qemu else 4):
         cpu_nodes.append(node(f'cpu{core}', [
@@ -207,10 +215,13 @@ def build(seed=None, qemu=False, highmem=False, native=False, midmem=False):
         ('stride', u32(FB_STRIDE)),
     ])
 
-    # bsd/dev/sweet_ufs.c: the UFS host ABL leaves running (absolute physical reg).
+    # bsd/dev/sweet_ufs.c: for the A05s this points at the eMMC/SDHCI controller,
+    # NOT a UFS host. The kernel driver needs a port to SDHCI before storage
+    # works; until then the kernel will panic here, which is expected and proves
+    # everything up to storage init is working.
     ufs = node('sweet-ufs', [
         ph(),
-        ('compatible', cstr('qcom,ufshc')),
+        ('compatible', cstr('qcom,ufshc')),  # matches the current kernel driver
         ('reg', u64(UFS, UFS_SIZE)),
     ])
 
@@ -240,10 +251,11 @@ def build(seed=None, qemu=False, highmem=False, native=False, midmem=False):
     # Identity of the iPhone X whose userland runs here: compatible[0] is
     # hw.model/hw.target (D22AP), model is hw.machine/hw.product
     # (iPhone10,3). 'xiaomi,sweet' and qcom,kryo470 stay because the
-    # SweetPlatformExpert and CPU IONameMatch still use them.
+    # SweetPlatformExpert and CPU IONameMatch still use them. The
+    # hardware-specific identifier is now samsung,a05s (was xiaomi,topaz).
     return node('device-tree', [
         ph(),
-        ('compatible', cstr('D22AP') + cstr('iPhone10,3') + cstr('xiaomi,topaz') + cstr('xiaomi,sweet') + cstr('qcom,khaje') + cstr('AppleARM')),
+        ('compatible', cstr('D22AP') + cstr('iPhone10,3') + cstr('samsung,a05s') + cstr('xiaomi,sweet') + cstr('qcom,khaje') + cstr('AppleARM')),
         ('model', cstr('iPhone10,3')),
         ('target-type', cstr('D22')),
         ('target-sub-type', cstr('D22AP')),
