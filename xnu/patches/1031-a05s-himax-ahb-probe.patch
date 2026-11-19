@@ -1,0 +1,164 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -1511,8 +1511,9 @@
+ }
+ 
+ /* ---- A05s: Himax HX83112F TDDI on QUP0 SE0 CS2, CPHA=1, 9.6 MHz ----------------
+- * The vendor driver keeps the touch firmware in the IC's own flash, so a pin
+- * reset is enough after iOS takes the panel. The event stack is a plain bank:
++ * The vendor builds this part with HX_ZERO_FLASH: it downloads the firmware on
++ * every boot, so a pin reset leaves the bootloader running (event stack reads
++ * back zero). The event stack is a plain bank:
+  * [0xF3, reg, 0] then the answer, full duplex on one buffer; the first three
+  * received bytes are the command echo. HX83112F reports 10 fingers as x/y
+  * big-endian pairs, 10 weight bytes, then the finger count in the last word.
+@@ -1541,6 +1542,98 @@
+ 	return e;
+ }
+ 
++#define HX_BUS_W_CMD     0xf2u
++#define HX_AHB_ADDR_CMD  0x00u
++#define HX_AHB_RDATA     0x08u
++#define HX_AHB_DIR       0x0cu
++#define HX_AHB_DIR_READ  0x00u
++#define HX_AHB_CONT      0x13u
++#define HX_AHB_INC4      0x0du
++#define HX_FW_VER        0x10007004u
++#define HX_FW_STATE      0x900000f8u
++#define HX_CHK_FW_STATUS 0x900000a8u
++#define HX_RESET_EVENT   0x900000e4u
++#define HX_LEAVE_SAFE    0x90000098u
++
++static void
++hx_put_be32(uint8_t *p, uint32_t v)
++{
++	p[0] = (uint8_t)(v >> 24);
++	p[1] = (uint8_t)(v >> 16);
++	p[2] = (uint8_t)(v >> 8);
++	p[3] = (uint8_t)v;
++}
++
++/* Vendor himax_bus_write(): [F2, cmd, addr(4B big endian)?, data], TX only. */
++static int
++himax_write_raw(uint8_t cmd, const uint8_t *addr4, const uint8_t *data, unsigned len)
++{
++	uint8_t tx[2u + 4u + 64u];
++	unsigned n = 2;
++
++	if (len > 64u) {
++		return -1;
++	}
++	tx[0] = HX_BUS_W_CMD;
++	tx[1] = cmd;
++	if (addr4) {
++		memcpy(tx + n, addr4, 4);
++		n += 4;
++	}
++	if (data && len) {
++		memcpy(tx + n, data, len);
++		n += len;
++	}
++	return rain_spi(RAIN_OP_TX, tx, NULL, n);
++}
++
++/* hx83112f_burst_enable(): AHB continuous mode plus 4-byte auto increment. */
++static void
++himax_burst(int on)
++{
++	uint8_t d;
++
++	d = 0x31u;
++	(void)himax_write_raw(HX_AHB_CONT, NULL, &d, 1);
++	d = (uint8_t)(0x10u | (on ? 1u : 0u));
++	(void)himax_write_raw(HX_AHB_INC4, NULL, &d, 1);
++}
++
++/* hx83112f_register_write() with one 32-bit value. */
++static int
++himax_ahb_write(uint32_t addr, uint32_t val)
++{
++	uint8_t a[4], d[4];
++
++	himax_burst(0);
++	hx_put_be32(a, addr);
++	hx_put_be32(d, val);
++	return himax_write_raw(HX_AHB_ADDR_CMD, a, d, 4);
++}
++
++/* hx83112f_register_read(): address, access direction, then the 0x08 bank. */
++static int
++himax_ahb_read(uint32_t addr, uint8_t *buf, unsigned len)
++{
++	uint8_t a[4], dir = HX_AHB_DIR_READ;
++	int e;
++
++	if (len > 64u) {
++		return -1;
++	}
++	himax_burst(0);
++	hx_put_be32(a, addr);
++	e = himax_write_raw(HX_AHB_ADDR_CMD, a, NULL, 0);
++	if (e) {
++		return e;
++	}
++	e = himax_write_raw(HX_AHB_DIR, NULL, &dir, 1);
++	if (e) {
++		return e;
++	}
++	return himax_read(HX_AHB_RDATA, buf, len);
++}
++
+ static void a05s_touch_run(void);
+ 
+ /* Vendor HX_RST_PIN_FUNC: GPIO 86 is active low. */
+@@ -1568,8 +1661,50 @@
+ 	touch_wait(10);
+ 	touch_gpio(HX_GPIO_RST, 0, 0, 2, true, true);
+ 	touch_wait(100);
++	printf("A05S TOUCH: rst cfg=%#x io=%#x\n",
++	    touch_rd(st.west, TOUCH_GPIO_CFG(HX_GPIO_RST)),
++	    touch_rd(st.west, TOUCH_GPIO_IO(HX_GPIO_RST)));
+ 	printf("A05S TOUCH: se0 fw=%#x ifdis=%#x hwtx=%#x hwrx=%#x gpi=%d cpha=%#x cpol=%#x demux=%#x mclk=%#x\n",
+ 	    rn.fw, rn.ifdis, rn.hwtx, rn.hwrx, rg.mem != 0, rn.c_cpha, rn.c_cpol, rn.c_demux, rn.c_mclk);
++	{
++		uint8_t v[4];
++		unsigned r, w;
++
++		bzero(v, sizeof(v));
++		r = himax_ahb_read(HX_FW_VER, v, 4);
++		w = ((unsigned)v[0] << 24) | ((unsigned)v[1] << 16) | ((unsigned)v[2] << 8) | v[3];
++		printf("A05S TOUCH: ahb fw-ver e=%d %02x %02x %02x %02x (%#x)\n",
++		    (int)r, v[0], v[1], v[2], v[3], w);
++		bzero(v, sizeof(v));
++		r = himax_ahb_read(HX_CHK_FW_STATUS, v, 4);
++		printf("A05S TOUCH: ahb fw-status e=%d %02x %02x %02x %02x\n",
++		    (int)r, v[0], v[1], v[2], v[3]);
++		bzero(v, sizeof(v));
++		r = himax_ahb_read(HX_RESET_EVENT, v, 4);
++		printf("A05S TOUCH: ahb reset-event e=%d %02x %02x %02x %02x\n",
++		    (int)r, v[0], v[1], v[2], v[3]);
++		bzero(v, sizeof(v));
++		r = himax_ahb_read(HX_FW_STATE, v, 4);
++		printf("A05S TOUCH: ahb fw-state e=%d %02x %02x %02x %02x\n",
++		    (int)r, v[0], v[1], v[2], v[3]);
++		for (unsigned cs = 0; cs < 4u; cs++) {
++			touch_wr(rn.se, RAIN_SPI_DEMUXSEL, cs);
++			touch_wait(1);
++			bzero(v, sizeof(v));
++			r = himax_ahb_read(HX_FW_VER, v, 4);
++			w = ((unsigned)v[0] << 24) | ((unsigned)v[1] << 16) | ((unsigned)v[2] << 8) | v[3];
++			printf("A05S TOUCH: cs%u fw-ver e=%d %02x %02x %02x %02x (%#x)\n",
++			    cs, (int)r, v[0], v[1], v[2], v[3], w);
++		}
++		touch_wr(rn.se, RAIN_SPI_DEMUXSEL, 2);
++		r = himax_ahb_write(HX_LEAVE_SAFE, 0x00000053u);
++		touch_wait(50);
++		bzero(v, sizeof(v));
++		r = himax_ahb_read(HX_FW_VER, v, 4);
++		w = ((unsigned)v[0] << 24) | ((unsigned)v[1] << 16) | ((unsigned)v[2] << 8) | v[3];
++		printf("A05S TOUCH: leave-safe e=%d fw-ver %02x %02x %02x %02x (%#x)\n",
++		    (int)r, v[0], v[1], v[2], v[3], w);
++	}
+ 	for (int t = 0; t < 10 && e; t++) {
+ 		e = himax_read(HX_EVENT_STACK, buf, sizeof(buf));
+ 		if (e) {

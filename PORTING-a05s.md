@@ -62,24 +62,46 @@ Boot image for the first userland boot:
 | 4 | 2026-11-18 | same boot, left running (~11 min) | **Milestone 2: iOS 16.5 lock screen on the A05s.** The first boot completed (data volume created); the lock screen is drawn on the 1080x2400 panel through the topaz display path. Touch is off (`sweettouch=0`, no Himax driver), GPU is off (no `gpu=1`/userland), so the UI is CPU-rendered and not interactive yet. |
 
 | 5 | 2026-11-18 | `a05s-touch1.img` = CI kernel with `0997` + `MODE=ios ... raintouch=1 a05stouch=1 sweetusb=3` | **Touch probe runs, but no touch.** Log: `A05S TOUCH: se0 fw=0x102 ifdis=0 hwtx=0x20102964 hwrx=0x20204800 gpi=0 cpha=0x1 demux=0x2 mclk=0x21`; `himax event-stack read e=0 00 00 00 00 00 00 00`. The A05s SE0 is in FIFO mode (`ifdis=0`), not GPI-DMA. Root cause found in the vendor source: `himax_platform.c` sets `spi->mode = SPI_MODE_3` (CPOL=1), but we had CPOL=0; the GENI CPOL is bit 2 (write 4, not 1). A FIFO TX-preload attempt (0998 draft) made the SE hang, so it was reverted. |
+| 6 | 2026-11-19 | `a05s-touch2.img` = `0998` FIFO-preload draft | Boot hung in `rain_spi` after the `se0` print: GENI rejects TX written before `SE_CMD`. Preload reverted. |
+| 7 | 2026-11-19 | `a05s-touch3.img` = `0998` CPOL=4 | `cpha=0x1 cpol=0x4 demux=0x2 mclk=0x21`, event stack still zero and no heartbeat: a later `rain_spi` read spun for 200 s. `0999` cuts that spin to 5000 iterations and prints the heartbeat even on error. |
+| 8 | 2026-11-19 | `a05s-touch4.img` = `0999` diagnostics | **Transport proven, chip silent.** `pins=0x84 0x84 0x84 0x84` (all four SE0 pins muxed), internal FIFO loopback `e=0 11 22 33 44 55 66 77 88`, `se0 ... cpol=0x4`, but the event stack and every poll read `00`: MISO is not driven. Vendor `himax_common.h` defines **`HX_ZERO_FLASH`**, so the HX83112F has no boot flash: the vendor downloads the firmware on every boot (`himax_boot_upgrade` sets `g_boot_upgrade_flag = true`). A pin reset alone leaves the ROM bootloader, which does not serve the event stack. `research/fw-a05s/hx83112f_TXD_FW.bin` is the image to download. |
 
 ## Current state / next
 
 - `userdata` now holds the iOS 16.5 HFS+ root and the first boot completed.
   The root is 16 GiB inside a 116.6 GB partition; it needs `hfs-grow` (GPU
   userland) later to use the rest.
-- **Touch (Himax hx83112f), test #1.** `0997` adds the A05s branch to the
-  rain `sweet_touch.c`: `raintouch=1 a05stouch=1`, SE0 CS2/CPHA=1/9.6 MHz,
-  reset GPIO 86, event stack `0x30`, 56-byte HX83112F report. The kernel
-  booted to the lock screen and the probe ran, but the event stack read was
-  all-zero. The A05s SE0 is in **FIFO mode** (`gpi=0 ifdis=0`). The vendor
-  source (`research/himax/himax_platform.c:1362`) sets `spi->mode = SPI_MODE_3`
-  (CPOL=1, CPHA=1); we had CPOL=0. In the GENI the CPOL field is bit 2, so the
-  register value is `4`, not `1`. `0998-a05s-himax-spi-mode3.patch` sets
-  CPOL=4 and adds a 1 s `poll n= sum= xy= state=` heartbeat. A TX-FIFO preload
-  was tried and reverted: the GENI hangs if TX is written before `SE_CMD`.
-  Rebuild/boot with the same args; if the heartbeat stays all-zero, check the
-  CS2 pin/DEMUX, GPIO 86 reset/power rail and the IC flash FW.
+- **Touch (Himax hx83112f), current blocker.** `0997` adds the A05s branch
+  to the rain `sweet_touch.c`: `raintouch=1 a05stouch=1`, SE0 CS2/CPHA=1/
+  CPOL=4/9.6 MHz, reset GPIO 86, event stack `0x30`, 56-byte HX83112F report.
+  `0998` sets mode 3 and adds the heartbeat; `0999` adds the short FIFO
+  timeout, pin readback, internal loopback and the always-on heartbeat.
+  Test #4 proved the SoC side: pins muxed, loopback byte-exact, SE alive. The
+  chip itself stays silent (MISO all zero), and the vendor source explains it:
+  `HX_ZERO_FLASH` (**defined** in `research/himax/himax_common.h:85`) makes
+  the HX83112F a **firmware-download-every-boot** part. `himax_boot_upgrade()`
+  sets `g_boot_upgrade_flag = true` unconditionally and calls
+  `_firmware_update_0f()`, which parses the partition table at
+  `CFG_TABLE_FLASH_ADDR`, writes the FW entity and merged config to SRAM over
+  the AHB bridge, CRC-checks them and reloads the FW. Only then does it
+  `_power_on_init()` / read the FW version. A pin reset alone leaves the ROM
+  bootloader, which does not serve `ADDR_EVENT_STACK 0x30`; hence the zeros.
+- **Next touch step.** `1031-a05s-himax-ahb-probe.patch` (untested) adds the
+  vendor AHB primitive (`[F2, 00, addr(4B BE), data]`, direction `0x0C`,
+  data bank `0x08`), burst setup (`0x13=0x31`, `0x0D=0x10`), a GPIO 86
+  cfg/IO readback, FW-version/status/reset-event reads at `0x10007004`,
+  `0x900000a8`, `0x900000e4`, `0x900000f8`, a CS0..3 scan of the FW version,
+  and a `leave-safe-mode` (`0x53 -> 0x90000098`) attempt. If the AHB read
+  answers on CS2 the transport/CS/reset are all good and only the download
+  is missing; an all-`FF` answer means MISO floats (power/reset/CS) and an
+  all-`00` answer means the chip is unpowered or held in reset.
+  After that, port `himax_zf_part_info()`: read `hx83112f_TXD_FW.bin` from
+  the iOS root (not from git), write `info[0]` (FW entity) and the merged
+  config with burst+AHB chunks, then `_reload_disable(0)`, `_power_on_init()`
+  (sense on, wait for `C072` reload-done) and re-read the event stack.
+  `_calc_crc_by_hw` can be skipped or implemented later; `_write_sram_0f`
+  chunks at `BUS_W_DLEN - 4`, but the FIFO path must chunk at <= 60 data
+  bytes per `rain_spi` call.
 - GPU (Adreno 610 / Mesa freedreno userland + A05s zap firmware) is the other
   big win: the CPU renderer is slow.
 - Live log: `build-a05s/a05s-A05S-dbg1.img` (`sweetusb=3 sweetfps=1`) is ready
@@ -104,10 +126,10 @@ Boot image for the first userland boot:
   and matches, but no DSC programming exists. The console (splash FB) works;
   the AppleCLCD/iOS scanout path is untested. `sweetfb_noshadow=1` is still used
   for the first boots.
-- **Touch**: `0997` (probe) + `0998` (SPI mode 3 / CPOL=4 + heartbeat) are in
-  the A05s series; the CPOL fix is not booted yet. If the event stack still
-  reads all-zero/0xFF, the next step is the Himax flash download (vendor
-  `hx83112f_TXD_FW.bin`) or checking that the IC's power rail is on.
+- **Touch**: `0997` + `0998` + `0999` are proven on hardware; `1031` is the
+  next probe. The real fix is the zero-flash FW download described above.
+  Do **not** commit `research/fw-a05s/hx83112f_TXD_FW.bin`; install it into
+  the iOS root image at build time and read it from the mounted root.
 - **GPU** (Adreno 610), **audio** (APR/Elite on ADSP), **Wi-Fi** (WCN),
   **battery** (SM5602), **USB live log**: all rain code should mostly port, but
   none has been run on the A05s yet.
