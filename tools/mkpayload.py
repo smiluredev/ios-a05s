@@ -171,7 +171,12 @@ def build(kernel_path, adt_path, cmdline, ramdisk_path=None, blobs=()):
     for name, path in blobs:
         image = open(path, 'rb').read()
         b_size = (len(image) + PAGE - 1) & ~(PAGE - 1)
-        b_va = kernel_end
+        # A05s: the blob used to sit at kernel_end, the first pages after the
+        # kernel, and the new kernel hangs in the touch reset just from having
+        # it there (the blob payload, not its contents: 1032 never reads it).
+        # Leave a 64 MB hole so the blob cannot be the bootstrap page tables
+        # or the first kalloc pages; the kernel maps it when SweetTouch asks.
+        b_va = (kernel_end + 0x4000000 + PAGE - 1) & ~(PAGE - 1)
         kernel_end = b_va + b_size
         pieces.append((b_va, b_size, image))
         adt_blob = add_ramdisk_to_adt(adt_blob, b_va - virt_base + PHYS_BASE, len(image), name)
