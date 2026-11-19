@@ -5,11 +5,10 @@
  
  	su.regs = ml_io_map(reg[0], reg[1]);
 +	/*
-+	 * Sanity: is this really a UFSHCI controller? The A05s device tree
-+	 * points /sweet-ufs at an SDHCI/eMMC controller (0x4744000), not a
-+	 * UFS controller. UFSHCI VER (0x08) is 0x0000MmPP: bits 31-16 zero,
-+	 * major 1-4 in bits 15-8. On SDHCI, offset 0x08 is Argument 1, which
-+	 * has no such invariant.
++	 * Sanity: is this really a UFSHCI controller? UFSHCI VER (0x08) is
++	 * 0x0000MmPP: bits 31-16 zero, major 1-4 in bits 15-8. On SDHCI,
++	 * offset 0x08 is Argument 1, which has no such invariant. Guards a
++	 * wrong /sweet-ufs reg (e.g. an SDHCI host) before any doorbell.
 +	 */
 +	{
 +		uint32_t ver = *(volatile uint32_t *)((uintptr_t)su.regs + 0x08);

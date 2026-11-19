@@ -34,15 +34,12 @@ FB, FB_SIZE = 0x5c000000, 0xf00000
 SWEET_ECID = 0x544f50415a000001  # 'TOPAZ' + 1, synthetic
 # A05s panel: hx83112f_txd_fhd_90hz_video, 1080x2400 @ 90 Hz with DSC
 FB_W, FB_H, FB_STRIDE = 1080, 2400, 1080 * 4
-# A05s storage: eMMC via SDHCI (qcom,sdhci-msm-v5), NOT UFS.
-# The real controller has three regions:
-#   reg = <0x4744000 0x1000 0x4745000 0x1000 0x4748000 0x8000>;
-#   reg-names = "hc", "cqhci", "cqhci_ice";
-# We expose only the main "hc" region for the initial boot. The kernel-side
-# driver (sweet_ufs.c) currently matches "qcom,ufshc" and will need a port
-# to SDHCI before storage actually works; for now the boot will panic here
-# (which is expected and proves everything up to storage init works).
-UFS, UFS_SIZE = 0x04744000, 0x1000
+# A05s storage: UFS, same UFSHCI host as rain/topaz (ufshc@4804000).
+# fastboot getvar all on the phone lists the UFS SCSI LUNs sda..sde, so the
+# existing sweet_ufs.c driver applies (the sdhci@4744000 node is not the
+# boot storage). reg = <0x4804000 0x3000 0x4810000 0x8000>; the driver maps
+# the first "ufs_mem" region only.
+UFS, UFS_SIZE = 0x04804000, 0x3000
 TIMEBASE = 19200000
 VTIMER_INTID = 19
 # QEMU virt (-M virt,gic-version=3 -cpu cortex-a76): GICD/GICR and the generic timer's CNTFRQ
@@ -215,10 +212,7 @@ def build(seed=None, qemu=False, highmem=False, native=False, midmem=False):
         ('stride', u32(FB_STRIDE)),
     ])
 
-    # bsd/dev/sweet_ufs.c: for the A05s this points at the eMMC/SDHCI controller,
-    # NOT a UFS host. The kernel driver needs a port to SDHCI before storage
-    # works; until then the kernel will panic here, which is expected and proves
-    # everything up to storage init is working.
+    # bsd/dev/sweet_ufs.c: the UFS host ABL leaves running (absolute physical reg).
     ufs = node('sweet-ufs', [
         ph(),
         ('compatible', cstr('qcom,ufshc')),  # matches the current kernel driver
