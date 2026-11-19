@@ -1,0 +1,74 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -1831,38 +1831,47 @@
+ 		touch_wait(20);
+ 	}
+ 	printf("A05S TOUCH: safe-mode done i=%u\n", i);
++	touch_wait(100);
+ 	{
+ 		uint8_t r[16];
+ 		bzero(r, sizeof(r));
+ 		(void)himax_ahb_read(HX_CTRL_FW, r, 4);
+ 		printf("A05S TOUCH: ctrl_fw %02x %02x %02x %02x\n", r[0], r[1], r[2], r[3]);
++		touch_wait(100);
+ 		bzero(r, sizeof(r));
+ 		(void)himax_ahb_read(0x900000f8u, r, 4);
+ 		printf("A05S TOUCH: fw-state %02x %02x %02x %02x\n", r[0], r[1], r[2], r[3]);
+ 	}
+ 
++	touch_wait(100);
+ 	himax_burst(1);
+ 	e = himax_write_sram(hx_fw_pa, hx_fw + hx_fw_off, hx_fw_sz);
+ 	printf("A05S TOUCH: fw entity e=%d\n", e);
++	touch_wait(100);
+ 	{
+ 		uint8_t r[16];
+ 		unsigned k;
+ 		bzero(r, sizeof(r));
+ 		(void)himax_ahb_read(hx_fw_pa, r, sizeof(r));
+-		printf("A05S TOUCH: sram read");
+-		for (k = 0; k < sizeof(r); k++) {
+-			printf(" %02x", r[k]);
++		for (k = 0; k < sizeof(r); k += 8) {
++			unsigned j;
++			printf("A05S TOUCH: sram+%u", k);
++			for (j = 0; j < 8; j++) {
++				printf(" %02x", r[k + j]);
++			}
++			printf(" want");
++			for (j = 0; j < 8; j++) {
++				printf(" %02x", hx_fw[hx_fw_off + k + j]);
++			}
++			printf("\n");
++			touch_wait(50);
+ 		}
+-		printf(" (want");
+-		for (k = 0; k < sizeof(r); k++) {
+-			printf(" %02x", hx_fw[hx_fw_off + k]);
+-		}
+-		printf(")\n");
+ 	}
+ 	if (!e) {
+ 		e = himax_write_sram(hx_cfg_pa, hx_cfg, hx_cfg_sz);
+ 	}
+ 	printf("A05S TOUCH: fw config e=%d\n", e);
++	touch_wait(100);
+ 	himax_burst(0);
+ 	if (e) {
+ 		return e;
+@@ -1881,6 +1890,7 @@
+ 	touch_gpio(HX_GPIO_RST, 0, 0, 2, true, true);
+ 	touch_wait(50);
+ 
++	touch_wait(100);
+ 	(void)himax_ahb_write(HX_RELOAD_ACTIVE, 0x000000ecu);
+ 	touch_wait(1);
+ 	for (i = 0; i < 30u; i++) {
+@@ -1894,6 +1904,7 @@
+ 	}
+ 	printf("A05S TOUCH: reload active ok=%u tries=%u v=%02x %02x %02x %02x\n",
+ 	    ok, i, v[0], v[1], v[2], v[3]);
++	touch_wait(100);
+ 	for (i = 0; i < 30u; i++) {
+ 		bzero(v, sizeof(v));
+ 		(void)himax_ahb_read(HX_FW_RELOAD2, v, 4);
