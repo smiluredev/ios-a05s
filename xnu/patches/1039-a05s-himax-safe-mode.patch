@@ -7,8 +7,8 @@
 +#define HX_TCON_ON_RST   0x80020020u
 +#define HX_ADC_ON_RST    0x80020094u
  
+ /* hx_parse_assign_cmd() stores 32-bit values little endian, not big endian. */
  static void
- hx_put_be32(uint8_t *p, uint32_t v)
 @@ -1793,21 +1795,41 @@
  static int
  himax_download(void)
