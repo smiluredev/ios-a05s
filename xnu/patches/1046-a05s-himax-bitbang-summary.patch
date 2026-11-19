@@ -1,0 +1,54 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -2046,9 +2046,11 @@
+ a05s_bitbang(void)
+ {
+ 	static const uint8_t tx[3] = { 0xf3u, 0x30u, 0x00u };
+-	uint8_t rx[8];
+-	unsigned c, m, si, k;
++	uint8_t rx[8], best[8];
++	unsigned c, m, si, k, idx = 0, nz = 0;
++	unsigned bc = 4u, bm = 4u, bs = 4u, bk = 4u;
+ 
++	bzero(best, sizeof(best));
+ 	for (c = 0; c < 4u; c++) {
+ 		for (m = 0; m < 4u; m++) {
+ 			for (si = 0; si < 4u; si++) {
+@@ -2061,12 +2063,20 @@
+ 					}
+ 				}
+ 				bzero(rx, sizeof(rx));
+-				printf("A05S TOUCH: bb clk=%u mosi=%u miso=%u cs=%u\n",
+-				    c, m, si, k);
+ 				(void)bb_xfer(c, m, si, k, tx, sizeof(tx), rx, sizeof(rx));
+-				printf("A05S TOUCH: bb rx %02x %02x %02x %02x %02x %02x %02x %02x\n",
+-				    rx[0], rx[1], rx[2], rx[3], rx[4], rx[5], rx[6], rx[7]);
+-				touch_wait(100);
++				if (rx[0] | rx[1] | rx[2] | rx[3] |
++				    rx[4] | rx[5] | rx[6] | rx[7]) {
++					nz |= 1u << idx;
++					if (bc == 4u) {
++						bc = c;
++						bm = m;
++						bs = si;
++						bk = k;
++						memcpy(best, rx, sizeof(best));
++					}
++				}
++				idx++;
++				touch_wait(20);
+ 			}
+ 		}
+ 	}
+@@ -2074,6 +2084,11 @@
+ 		touch_gpio(c, 1, 0, 2, false, false);   /* back to qup0 */
+ 	}
+ 	touch_wait(50);
++	printf("A05S TOUCH: bb done nz=%06x best=%u/%u/%u/%u\n", nz, bc, bm, bs, bk);
++	touch_wait(200);
++	printf("A05S TOUCH: bb best %02x %02x %02x %02x %02x %02x %02x %02x\n",
++	    best[0], best[1], best[2], best[3], best[4], best[5], best[6], best[7]);
++	touch_wait(200);
+ }
+ 
+ /* Vendor HX_RST_PIN_FUNC: GPIO 86 is active low. */
