@@ -1,32 +1,46 @@
 #!/bin/bash
-# Build a boot image from a kernel and fastboot-boot it once the phone answers.
-#   build-rain/boot-probe.sh <github-run-id | kernel file> <patch-no> <tag> [extra cmdline]
-# e.g. build-rain/boot-probe.sh 42492125916 0979 C10
-#      build-rain/boot-probe.sh ~/Downloads/kernel.development.sweet 0991 D2   (from Codemagic, say)
-# Debugging a probe that ends in a panic: pass '-v cpus=1 sweetfb_noconsole=0' as the 4th argument is not
-# enough (the first cpus= wins); edit the line below instead.
-# Needs research/fw-fog/novatek_ts_fw.bin (vendor firmware, not in git) for the touch stages.
-set -e
+# A05s: build a boot image from an XNU kernel + ADT and print the flash command.
+#   build-a05s/boot-probe.sh <kernel | xnu-kernel.zip | run-id> <tag> [extra cmdline]
+# e.g. build-a05s/boot-probe.sh ~/Downloads/kernel.development.sweet A05S1
+#      build-a05s/boot-probe.sh xnu-kernel.zip A05S1
+#      build-a05s/boot-probe.sh 44419768019 A05S1        (needs gh, logged in)
+#
+# This does NOT flash anything: it writes build-a05s/a05s-<tag>.img and prints
+# the fastboot command. Restore the stock boot with:
+#   fastboot flash boot /media/MiguelTheDRMR/HDMig/a05s_stock_extract/base_images/boot.img
+set -euo pipefail
 cd "$(dirname "$0")/.."
-P=$PWD R=$1 N=$2 T=$3
+P=$PWD
+R=${1:?kernel file, zip or run id}
+T=${2:?tag, e.g. A05S1}
+EXTRA=${3:-}
+REPO=smiluredev/ios-a05s
+ADT=build-a05s/a05s-ios-2g.adt
+OUT="xnu/out-$T"
+
 if [ -f "$R" ]; then
-	K=$(cd "$(dirname "$R")" && pwd)/$(basename "$R")
-	mkdir -p "xnu/out-$N" && [ "$K" = "$P/xnu/out-$N/kernel.development.sweet" ] || cp "$K" "xnu/out-$N/kernel.development.sweet"
+	case "$R" in
+	*.zip) rm -rf "$OUT"; mkdir -p "$OUT"; unzip -q -o "$R" -d "$OUT" ;;
+	*) mkdir -p "$OUT"; cp -f "$R" "$OUT/kernel.development.sweet" ;;
+	esac
 else
-	gh run watch "$R" -R taynotfound/ios-rain --exit-status -i 30 >/dev/null
-	rm -rf "xnu/out-$N" && gh run download "$R" -R taynotfound/ios-rain -n xnu-kernel -D "xnu/out-$N"
-	(cd "xnu/out-$N" && sha256sum -c SHA256SUMS)
+	command -v gh >/dev/null || { echo "gh not installed; download the xnu-kernel artifact and pass the zip" >&2; exit 1; }
+	rm -rf "$OUT"
+	gh run download "$R" -R "$REPO" -n xnu-kernel -D "$OUT"
 fi
-FW=research/fw-fog/novatek_ts_fw.bin
-python3 tools/mkpayload.py "xnu/out-$N/kernel.development.sweet" build-rain/rain-ios-2g.adt "build-rain/payload-$T.bin" \
-  ${FW:+$( [ -f "$FW" ] && echo --blob TouchFW=$FW )} \
-  --cmdline "debug=0xc serial=3 cpus=4 keepsyms=1 -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1 sweettouch=0 sweetchg=0 sweetfb_noshadow=1 sweetfb_fit=3 raintouch=1 sweettouchdelay=0 raintouchpause=0 sweetfb_noconsole=1 sweetfb_hz=60 gpu=1 gpu_mhz=600 $4" >/dev/null
-PATH=$P/build-rain/bin:$PATH MKBOOTIMG=mkbootimg bash shim/build.sh "$P/build-rain/payload-$T.bin" >/dev/null 2>&1
-cp shim/out/shim-boot.img "build-rain/shim-xnu-rain-touch$T.img"
-# Xiaomi's ABL stops taking data after idling in fastboot: time the transfer out and wait for a fresh session
-until
-  echo "waiting for fastboot $(date +%T)"
-  ok=0; until [ $ok -ge 2 ]; do if timeout 3 fastboot getvar product 2>&1 | grep -q 'product: rain'; then ok=$((ok+1)); else ok=0; fi; sleep 1; done
-  timeout 30 fastboot boot "build-rain/shim-xnu-rain-touch$T.img"
-do echo "transfer hung: re-enter fastboot (Vol- + Power) $(date +%T)"; sleep 5; done
-echo "booted $(date +%T)"
+K="$OUT/kernel.development.sweet"
+[ -s "$K" ] || { echo "missing $K" >&2; exit 1; }
+(cd "$OUT" && [ -f SHA256SUMS ] && sha256sum -c SHA256SUMS) || true
+
+# Milestone: XNU console on the A05s, read-only root (no ufsrw/rootrw).
+# cpus=1 matches the known-good first boot on rain; sweettouch=0 keeps the
+# rain Novatek/Himax path out, sweetfb_noshadow=1 skips the flip/fade buffers.
+CMDLINE="debug=0xc serial=3 cpus=1 keepsyms=1 -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin wdt=-1 sweettouch=0 sweetchg=0 sweetfb_noshadow=1 $EXTRA"
+
+python3 tools/mkpayload.py "$K" "$ADT" "build-a05s/payload-$T.bin" --cmdline "$CMDLINE" >/dev/null
+PATH="$P/build-rain/bin:$PATH" MKBOOTIMG=mkbootimg bash shim/build.sh "$P/build-a05s/payload-$T.bin" >/dev/null 2>&1
+cp shim/out/shim-boot.img "build-a05s/a05s-$T.img"
+ls -l "build-a05s/a05s-$T.img"
+echo
+echo "flash (destructive to the Android boot partition; stock backup exists):"
+echo "  fastboot flash boot build-a05s/a05s-$T.img && fastboot reboot"
