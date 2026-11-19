@@ -1,0 +1,284 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -1554,6 +1554,16 @@
+ #define HX_CHK_FW_STATUS 0x900000a8u
+ #define HX_RESET_EVENT   0x900000e4u
+ #define HX_LEAVE_SAFE    0x90000098u
++#define HX_SYSTEM_RESET  0x90000018u
++#define HX_CTRL_FW       0x9000005cu
++#define HX_RELOAD_ACTIVE 0x90000048u
++#define HX_RAWOUT_SEL    0x100072ecu
++#define HX_SORTING_MODE  0x10007f04u
++#define HX_SET_FRAME     0x10007294u
++#define HX_FW_RELOAD     0x10007f00u
++#define HX_FW_RELOAD2    0x100072c0u
++#define HX_FW_TABLE      0x10400u
++#define HX_FW_MAXPTR     10u
+ 
+ /* hx_parse_assign_cmd() stores 32-bit values little endian, not big endian. */
+ static void
+@@ -1635,6 +1645,211 @@
+ 	return himax_read(HX_AHB_RDATA, buf, len);
+ }
+ 
++static const uint8_t *hx_fw;
++static unsigned hx_fw_len;
++static uint8_t hx_cfg[8192];
++static uint32_t hx_fw_pa, hx_fw_off, hx_fw_sz, hx_cfg_pa, hx_cfg_sz;
++
++/* The FW rides in the boot payload as /chosen/memory-map a05sfw = <pa, len>
++ * (tools/mkpayload.py --blob), so it never has to live in git or in the root. */
++static int
++himax_fw_map(void)
++{
++	DTEntry mm;
++	void const *prop = NULL;
++	unsigned int psize = 0;
++	uint64_t pa, len;
++	vm_offset_t va;
++
++	if (hx_fw) {
++		return 0;
++	}
++	if (SecureDTLookupEntry(NULL, "/chosen/memory-map", &mm) != kSuccess ||
++	    SecureDTGetProperty(mm, "a05sfw", &prop, &psize) != kSuccess ||
++	    psize < 16 || !prop) {
++		return -1;
++	}
++	pa = ((const uint64_t *)prop)[0];
++	len = ((const uint64_t *)prop)[1];
++	if (len < 0x20000u || len > (16u << 20)) {
++		return -1;
++	}
++	/* The shim's copy may still sit in the cache. */
++	flush_dcache64((addr64_t)pa, (unsigned)len, TRUE);
++	va = ml_io_map((vm_offset_t)pa, (vm_size_t)len);
++	if (!va) {
++		return -1;
++	}
++	hx_fw = (const uint8_t *)va;
++	hx_fw_len = (unsigned)len;
++	printf("A05S TOUCH: fw blob pa=%#llx len=%u\n",
++	    (unsigned long long)pa, hx_fw_len);
++	return 0;
++}
++
++/* Partition table at 0x10400: {sram,size,fw_off,flags} little endian, 10 entries. */
++static int
++himax_fw_prepare(void)
++{
++	uint32_t sram[HX_FW_MAXPTR], sz[HX_FW_MAXPTR], off[HX_FW_MAXPTR];
++	uint32_t base = 0xffffffffu, end = 0;
++	unsigned pnum, i;
++
++	if (!hx_fw || hx_fw_len < HX_FW_TABLE + 16u * 2u) {
++		return -1;
++	}
++	pnum = hx_fw[HX_FW_TABLE + 12u];
++	if (pnum < 2u || pnum > HX_FW_MAXPTR) {
++		return -1;
++	}
++	for (i = 0; i < pnum; i++) {
++		const uint8_t *p = hx_fw + HX_FW_TABLE + i * 16u;
++		sram[i] = (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
++		    ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
++		sz[i] = (uint32_t)p[4] | ((uint32_t)p[5] << 8) |
++		    ((uint32_t)p[6] << 16) | ((uint32_t)p[7] << 24);
++		off[i] = (uint32_t)p[8] | ((uint32_t)p[9] << 8) |
++		    ((uint32_t)p[10] << 16) | ((uint32_t)p[11] << 24);
++		if (!sz[i] || off[i] > hx_fw_len || sz[i] > hx_fw_len - off[i]) {
++			return -1;
++		}
++		if ((p[14] == 0x77u && p[15] == 0x88u) ||
++		    (p[14] == 0x55u && p[15] == 0x66u)) {
++			printf("A05S TOUCH: fw overlay section %u unsupported\n", i);
++			return -1;
++		}
++	}
++	for (i = 1; i < pnum; i++) {
++		if (sram[i] < base) {
++			base = sram[i];
++		}
++		if (sram[i] + sz[i] > end) {
++			end = sram[i] + sz[i];
++		}
++	}
++	if (base == 0xffffffffu || end <= base) {
++		return -1;
++	}
++	hx_cfg_sz = (end - base + 15u) & ~15u;
++	if (hx_cfg_sz > sizeof(hx_cfg)) {
++		return -1;
++	}
++	bzero(hx_cfg, sizeof(hx_cfg));
++	for (i = 1; i < pnum; i++) {
++		memcpy(hx_cfg + (sram[i] - base), hx_fw + off[i], sz[i]);
++	}
++	hx_fw_pa = sram[0];
++	hx_fw_off = off[0];
++	hx_fw_sz = sz[0];
++	hx_cfg_pa = base;
++	printf("A05S TOUCH: fw table pnum=%u fw=%#x+%u cfg=%#x+%u\n",
++	    pnum, hx_fw_pa, hx_fw_sz, hx_cfg_pa, hx_cfg_sz);
++	return 0;
++}
++
++/* AHB burst writes 4 bytes per word, so keep every chunk word aligned. */
++static int
++himax_write_sram(uint32_t addr, const uint8_t *data, unsigned len)
++{
++	unsigned off = 0, chunks = 0;
++
++	while (off < len) {
++		unsigned n = len - off;
++		uint8_t a[4];
++		int e;
++
++		if (n > 60u) {
++			n = 60u;
++		}
++		n &= ~3u;
++		if (!n) {
++			return -1;
++		}
++		hx_put_le32(a, addr + off);
++		e = himax_write_raw(HX_AHB_ADDR_CMD, a, data + off, n);
++		if (e) {
++			return e;
++		}
++		off += n;
++		if ((++chunks & 7u) == 0u) {
++			touch_wait(1);
++		}
++	}
++	return 0;
++}
++
++/* himax_mcu_firmware_update_0f + _power_on_init, with the GPIO 86 pin reset
++ * that makes the zero-flash part boot the image just written to SRAM. */
++static int
++himax_download(void)
++{
++	uint8_t v[4], d;
++	unsigned i, ok = 0;
++	int e;
++
++	printf("A05S TOUCH: fw download start\n");
++	(void)himax_ahb_write(HX_SYSTEM_RESET, 0x00000055u);
++	touch_wait(20);
++	{
++		uint8_t off[2] = { 0x27u, 0x95u };
++		(void)himax_write_raw(0x31u, NULL, off, 2);
++	}
++	touch_wait(20);
++	d = 0x00u;
++	(void)himax_write_raw(0x31u, NULL, &d, 1);
++	touch_wait(10);
++
++	himax_burst(1);
++	e = himax_write_sram(hx_fw_pa, hx_fw + hx_fw_off, hx_fw_sz);
++	printf("A05S TOUCH: fw entity e=%d\n", e);
++	if (!e) {
++		e = himax_write_sram(hx_cfg_pa, hx_cfg, hx_cfg_sz);
++	}
++	printf("A05S TOUCH: fw config e=%d\n", e);
++	himax_burst(0);
++	if (e) {
++		return e;
++	}
++
++	(void)himax_ahb_write(HX_FW_RELOAD, 0x00009aa9u);
++	(void)himax_ahb_write(HX_RAWOUT_SEL, 0);
++	(void)himax_ahb_write(HX_SORTING_MODE, 0);
++	(void)himax_ahb_write(HX_SET_FRAME, 1);
++	(void)himax_ahb_write(HX_FW_RELOAD2, 0);
++	(void)himax_ahb_write(HX_CTRL_FW, 0);
++	touch_wait(10);
++
++	touch_gpio(HX_GPIO_RST, 0, 0, 2, true, false);
++	touch_wait(2);
++	touch_gpio(HX_GPIO_RST, 0, 0, 2, true, true);
++	touch_wait(50);
++
++	(void)himax_ahb_write(HX_RELOAD_ACTIVE, 0x000000ecu);
++	for (i = 0; i < 30u; i++) {
++		bzero(v, sizeof(v));
++		(void)himax_ahb_read(HX_RELOAD_ACTIVE, v, 4);
++		if (v[0] == 0xecu && v[1] == 0x01u) {
++			ok = 1;
++			break;
++		}
++		touch_wait(10);
++	}
++	printf("A05S TOUCH: reload active ok=%u tries=%u\n", ok, i);
++	for (i = 0; i < 30u; i++) {
++		bzero(v, sizeof(v));
++		(void)himax_ahb_read(HX_FW_RELOAD2, v, 4);
++		if (v[0] == 0xc0u && v[1] == 0x72u) {
++			break;
++		}
++		touch_wait(10);
++	}
++	bzero(v, sizeof(v));
++	(void)himax_ahb_read(HX_FW_VER, v, 4);
++	printf("A05S TOUCH: fw reload2 tries=%u fw-ver %02x %02x %02x %02x\n",
++	    i, v[0], v[1], v[2], v[3]);
++	return 0;
++}
++
+ static void a05s_touch_run(void);
+ 
+ /* Vendor HX_RST_PIN_FUNC: GPIO 86 is active low. */
+@@ -1667,44 +1882,14 @@
+ 	    touch_rd(st.west, TOUCH_GPIO_IO(HX_GPIO_RST)));
+ 	printf("A05S TOUCH: se0 fw=%#x ifdis=%#x hwtx=%#x hwrx=%#x gpi=%d cpha=%#x cpol=%#x demux=%#x mclk=%#x\n",
+ 	    rn.fw, rn.ifdis, rn.hwtx, rn.hwrx, rg.mem != 0, rn.c_cpha, rn.c_cpol, rn.c_demux, rn.c_mclk);
+-	{
+-		uint8_t v[4];
+-		unsigned r, w;
+-
+-		bzero(v, sizeof(v));
+-		r = himax_ahb_read(HX_FW_VER, v, 4);
+-		w = ((unsigned)v[3] << 24) | ((unsigned)v[2] << 16) | ((unsigned)v[1] << 8) | v[0];
+-		printf("A05S TOUCH: ahb fw-ver e=%d %02x %02x %02x %02x (%#x)\n",
+-		    (int)r, v[0], v[1], v[2], v[3], w);
+-		bzero(v, sizeof(v));
+-		r = himax_ahb_read(HX_CHK_FW_STATUS, v, 4);
+-		printf("A05S TOUCH: ahb fw-status e=%d %02x %02x %02x %02x\n",
+-		    (int)r, v[0], v[1], v[2], v[3]);
+-		bzero(v, sizeof(v));
+-		r = himax_ahb_read(HX_RESET_EVENT, v, 4);
+-		printf("A05S TOUCH: ahb reset-event e=%d %02x %02x %02x %02x\n",
+-		    (int)r, v[0], v[1], v[2], v[3]);
+-		bzero(v, sizeof(v));
+-		r = himax_ahb_read(HX_FW_STATE, v, 4);
+-		printf("A05S TOUCH: ahb fw-state e=%d %02x %02x %02x %02x\n",
+-		    (int)r, v[0], v[1], v[2], v[3]);
+-		for (unsigned cs = 0; cs < 4u; cs++) {
+-			touch_wr(rn.se, RAIN_SPI_DEMUXSEL, cs);
+-			touch_wait(1);
+-			bzero(v, sizeof(v));
+-			r = himax_ahb_read(HX_FW_VER, v, 4);
+-			w = ((unsigned)v[3] << 24) | ((unsigned)v[2] << 16) | ((unsigned)v[1] << 8) | v[0];
+-			printf("A05S TOUCH: cs%u fw-ver e=%d %02x %02x %02x %02x (%#x)\n",
+-			    cs, (int)r, v[0], v[1], v[2], v[3], w);
+-		}
+-		touch_wr(rn.se, RAIN_SPI_DEMUXSEL, 2);
+-		r = himax_ahb_write(HX_LEAVE_SAFE, 0x00000053u);
+-		touch_wait(50);
+-		bzero(v, sizeof(v));
+-		r = himax_ahb_read(HX_FW_VER, v, 4);
+-		w = ((unsigned)v[3] << 24) | ((unsigned)v[2] << 16) | ((unsigned)v[1] << 8) | v[0];
+-		printf("A05S TOUCH: leave-safe e=%d fw-ver %02x %02x %02x %02x (%#x)\n",
+-		    (int)r, v[0], v[1], v[2], v[3], w);
++	if (himax_fw_map() == 0) {
++		if (himax_fw_prepare() == 0) {
++			(void)himax_download();
++		} else {
++			printf("A05S TOUCH: fw table invalid\n");
++		}
++	} else {
++		printf("A05S TOUCH: no a05sfw blob (rebuild with boot-probe --blob)\n");
+ 	}
+ 	for (int t = 0; t < 10 && e; t++) {
+ 		e = himax_read(HX_EVENT_STACK, buf, sizeof(buf));

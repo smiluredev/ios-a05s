@@ -66,6 +66,8 @@ Boot image for the first userland boot:
 | 7 | 2026-11-19 | `a05s-touch3.img` = `0998` CPOL=4 | `cpha=0x1 cpol=0x4 demux=0x2 mclk=0x21`, event stack still zero and no heartbeat: a later `rain_spi` read spun for 200 s. `0999` cuts that spin to 5000 iterations and prints the heartbeat even on error. |
 | 8 | 2026-11-19 | `a05s-touch4.img` = `0999` diagnostics | **Transport proven, chip silent.** `pins=0x84 0x84 0x84 0x84` (all four SE0 pins muxed), internal FIFO loopback `e=0 11 22 33 44 55 66 77 88`, `se0 ... cpol=0x4`, but the event stack and every poll read `00`: MISO is not driven. Vendor `himax_common.h` defines **`HX_ZERO_FLASH`**, so the HX83112F has no boot flash: the vendor downloads the firmware on every boot (`himax_boot_upgrade` sets `g_boot_upgrade_flag = true`). A pin reset alone leaves the ROM bootloader, which does not serve the event stack. `research/fw-a05s/hx83112f_TXD_FW.bin` is the image to download. |
 | 9 | 2026-11-19 | `a05s-touch5.img` = `1031` AHB probe | Reset pin readback `rst cfg=0x280 io=0x3` (output, drive 2, high) and pins/loopback unchanged, so GPIO 86 is good. All AHB reads returned `00` on every CS, but **the probe was invalid**: `1031` encoded the AHB address big-endian while the vendor's `hx_parse_assign_cmd()` is **little-endian** (`cmd[0] = addr & 0xFF`). The event stack read is a single-byte command so it was valid; an idle event stack is zero, so it does not prove the FW is missing either. `1032` fixes the byte order and the printed FW-version value (LE). |
+| 10 | 2026-11-19 | `a05s-touch6.img` = `1032` (LE AHB) | **Byte order was the bug.** CS0 returned `2a b0 cf ee` (`0xEECFB02A`) on the FW-version register; CS1/2/3 stayed zero. CS0 is the **ilitek@0** socket on this bus (the DTS also has chipone@1 and himax@2), so the answer may be the Ilitek chip or floating MISO; the Himax on **CS2** still does not answer the AHB, which matches the zero-flash bootloader. The event stack is a single-byte command and was always valid. No touch events in the log. |
+| 11 | 2026-11-19 | `a05s-touch7.img` = `1033` zero-flash download + `boot-probe --blob a05sfw=...` (untested) | **First real fix attempt.** `boot-probe.sh` now adds `research/fw-a05s/hx83112f_TXD_FW.bin` to the payload (not git); the kernel finds it at `/chosen/memory-map a05sfw` and runs: AHB system reset `0x55`, sense-off, burst-on, 64 KiB FW entity to `0x20000000`, merged config to `0x10006a00`, reload-disable `0x9AA9`, `CTRL_FW=0`, GPIO 86 reset, reload `0xEC`, wait for `C072`, then read the FW version and the event stack. Payload verified locally: `a05sfw = (0x82600000, 131072)`. |
 
 ## Current state / next
 
@@ -96,13 +98,15 @@ Boot image for the first userland boot:
   answers on CS2 the transport/CS/reset are all good and only the download
   is missing; an all-`FF` answer means MISO floats (power/reset/CS) and an
   all-`00` answer means the chip is unpowered or held in reset.
-  **Correction (touch5):** `1031` sent AHB addresses big-endian; the vendor
-  helper is little-endian, so every AHB read above was from a wrong register
-  and proves nothing. `1032-a05s-himax-ahb-little-endian.patch` fixes the
-  address/data encoding and the LE value print. Boot `1032` next: a non-zero
-  `fw-ver` on CS2 means the FW *is* running (the zero event stack was just
-  "no finger") and the bug is in the report path; `0`/`FFFFFFFF` means the
-  bootloader, and then the zero-flash download below is required.
+  **touch6 result (1032):** the LE fix works (CS0 answered), but CS0 is the
+  **ilitek@0** socket; the Himax on **CS2** is still silent, consistent with
+  the zero-flash bootloader. `1033-a05s-himax-fw-download.patch` implements the
+  download and `boot-probe.sh` passes the FW with `--blob a05sfw=...`; the
+  kernel maps it from `/chosen/memory-map` (same mechanism as rain's
+  `TouchFW`). This is the next boot test. If the FW version stays zero, check
+  the reload/sense-on sequence (`CTRL_FW`, pin reset, `C072`) and the per-chunk
+  delays; if it becomes non-zero, the remaining work is the touch report/HID
+  path.
 - **Zero-flash download layout (from the file, not yet ported).**
   `research/fw-a05s/hx83112f_TXD_FW.bin` (131072 B): the partition table is at
   **0x10400** (the driver's map moves `CFG_TABLE_FLASH_ADDR` there; the compiled

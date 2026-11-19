@@ -48,7 +48,12 @@ else
 	CMDLINE="$COMMON cpus=1 $EXTRA"
 fi
 
-python3 tools/mkpayload.py "$K" "$ADT" "build-a05s/payload-$T.bin" --cmdline "$CMDLINE" >/dev/null
+# The Himax is a zero-flash part: put its firmware in the boot payload, not in
+# git, and let the kernel find it at /chosen/memory-map a05sfw = <pa, len>.
+FW=research/fw-a05s/hx83112f_TXD_FW.bin
+BLOBS=()
+[ -s "$FW" ] && BLOBS=(--blob "a05sfw=$FW")
+python3 tools/mkpayload.py "$K" "$ADT" "build-a05s/payload-$T.bin" --cmdline "$CMDLINE" "${BLOBS[@]}" >/dev/null
 PATH="$P/build-rain/bin:$PATH" MKBOOTIMG=mkbootimg bash shim/build.sh "$P/build-a05s/payload-$T.bin" >/dev/null 2>&1
 cp shim/out/shim-boot.img "build-a05s/a05s-$T.img"
 ls -l "build-a05s/a05s-$T.img"
