@@ -1,6 +1,11 @@
 #!/bin/bash
 # A05s: build a boot image from an XNU kernel + ADT and print the flash command.
-#   build-a05s/boot-probe.sh <kernel | xnu-kernel.zip | run-id> <tag> [extra cmdline]
+#   MODE=console build-a05s/boot-probe.sh <kernel | xnu-kernel.zip | run-id> <tag> [extra cmdline]
+#   MODE=ios     ...   (root read-write, iOS userland first boot)
+#
+# console: XNU text console, read-only root (milestone 1).
+# ios:     rd=ufsroot0 with ufsrw=1 rootrw=1, cpus=4; use after userdata holds
+#          the iOS HFS+ root from build-a05s/build-iosroot.sh.
 # e.g. build-a05s/boot-probe.sh ~/Downloads/kernel.development.sweet A05S1
 #      build-a05s/boot-probe.sh xnu-kernel.zip A05S1
 #      build-a05s/boot-probe.sh 44419768019 A05S1        (needs gh, logged in)
@@ -32,10 +37,16 @@ K="$OUT/kernel.development.sweet"
 [ -s "$K" ] || { echo "missing $K" >&2; exit 1; }
 (cd "$OUT" && [ -f SHA256SUMS ] && sha256sum -c SHA256SUMS) || true
 
-# Milestone: XNU console on the A05s, read-only root (no ufsrw/rootrw).
-# cpus=1 matches the known-good first boot on rain; sweettouch=0 keeps the
-# rain Novatek/Himax path out, sweetfb_noshadow=1 skips the flip/fade buffers.
-CMDLINE="debug=0xc serial=3 cpus=1 keepsyms=1 -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin wdt=-1 sweettouch=0 sweetchg=0 sweetfb_noshadow=1 $EXTRA"
+# sweettouch=0 keeps the rain Novatek/Himax path out; sweetfb_noshadow=1
+# skips the flip/fade buffers (the rain AppleCLCD hang).
+COMMON="debug=0xc serial=3 keepsyms=1 -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin wdt=-1 sweettouch=0 sweetchg=0 sweetfb_noshadow=1"
+if [ "${MODE:-console}" = ios ]; then
+	# First iOS userland boot: write the root (needed for the data volume).
+	CMDLINE="$COMMON cpus=4 ufsrw=1 rootrw=1 launchd_unsecure_cache=1 $EXTRA"
+else
+	# Milestone 1: read-only, one core (the known-good rain first boot).
+	CMDLINE="$COMMON cpus=1 $EXTRA"
+fi
 
 python3 tools/mkpayload.py "$K" "$ADT" "build-a05s/payload-$T.bin" --cmdline "$CMDLINE" >/dev/null
 PATH="$P/build-rain/bin:$PATH" MKBOOTIMG=mkbootimg bash shim/build.sh "$P/build-a05s/payload-$T.bin" >/dev/null 2>&1
