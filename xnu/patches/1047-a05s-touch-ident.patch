@@ -59,11 +59,20 @@
  /* Vendor HX_RST_PIN_FUNC: GPIO 86 is active low. */
  static void
  a05s_touch_bringup(void)
-@@ -2039,6 +2094,7 @@
- 	    touch_rd(st.west, TOUCH_GPIO_IO(HX_GPIO_RST)));
- 	printf("A05S TOUCH: se0 fw=%#x ifdis=%#x hwtx=%#x hwrx=%#x gpi=%d cpha=%#x cpol=%#x demux=%#x mclk=%#x\n",
- 	    rn.fw, rn.ifdis, rn.hwtx, rn.hwrx, rg.mem != 0, rn.c_cpha, rn.c_cpol, rn.c_demux, rn.c_mclk);
-+	a05s_ident();
- 	if (himax_fw_map() == 0) {
- 		if (himax_fw_prepare() == 0) {
- 			(void)himax_download();
+@@ -2084,8 +2139,13 @@
+ 		uint32_t mask = 0;
+ 
+ 		if (++tick % 100u == 0) {
+-			printf("A05S TOUCH: poll %u last_e=%d last_sum=%#x last_n=%u errs=%u state=%02x %02x %02x %02x\n",
+-			    tick, last_e, last_sum, last_n, errs, buf[52], buf[53], buf[54], buf[55]);
++			printf("A05S TOUCH: poll %u last_e=%d last_sum=%#x last_n=%u errs=%u irq=%u state=%02x %02x %02x %02x\n",
++			    tick, last_e, last_sum, last_n, errs,
++			    touch_rd(st.west, TOUCH_GPIO_IO(TOUCH_PIN_IRQ)) & 1u,
++			    buf[52], buf[53], buf[54], buf[55]);
++		}
++		if (tick == 1u) {
++			a05s_ident();
+ 		}
+ 		if (rain_panel_off) {
+ 			touch_report(0, st.x, st.y);
+
