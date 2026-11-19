@@ -36,10 +36,32 @@ implemented. Flashing `boot` from fastbootd works; the bootloader is unlocked
 | 1 | 2026-11-18 | shim only, 1080×2400 (commit `3aa5aff`) | **Milestone 0.** Samsung ABL accepted the v4 boot image and ran the shim on Gold CPU `0x100`. `MMFR0 tg16=1`, `MIDR 411FD090`, GICD/GICR + 4 Gold ready (0x101–0x103), `CPUFREQ 2400 MHz`, `SPEED silver=0x7B9DA gold=0x1D4C34`. `DDR MiB 0x400+0x3CC, 0x1000+0xC00, 0x8000+0x8000` (~6 GB). `PANEL hx83112f_txd_fhd_90hz_video`. Console readable, correct 4320-byte stride. Last line `LOADER no SWEETXNU payload` (expected). |
 | 2 | 2026-11-18 | XNU from run `44419768019` (commit `3cbfdf2`, rain patch series, no 0999) + `build-a05s/a05s-ios-2g.adt`; `cpus=1 rd=ufsroot0 sweettouch=0 sweetchg=0 sweetfb_noshadow=1`, no `ufsrw/rootrw` | **Milestone 1.** XNU runs to root mount: `BSD root: ufsroot0` (the UFS driver read the A05s LUN0 GPT and found `userdata`), then HFS+ rejects the Android filesystem, `cannot mount root, errno = 19` (expected). CPU/GIC/timer/display/UFS all validated. |
 
+## iOS root image (2026-11-18)
+
+`sudo bash build-a05s/build-iosroot.sh` built `research/ipsw/ios16-root.img`
+(16 GiB HFS+, 12 GiB used, SHA-256 starts `a2f566ff…`; raw .img, `img2simg`
+is not installed here). Root is iOS **16.5 / 20F66**; the tweak script read
+that from the image's `SystemVersion.plist`.
+
+Verification (`build-a05s/check-iosroot.sh`): 528 LaunchDaemons, 0
+`_PanicOnCrash`, 7 `_PanicOnCrasX`, no CommCenter, `purplebuddy`/`springboard`
+prefs present, 44 dyld-cache files, `launchd` present. `virtualaudio` disabled
+(no RedwoodAudio yet). Observations, not blockers:
+- no `mobileactivationd` system container in this 16.5 root, so the data-ark
+  seed was skipped (`activation()` warned); the Activated state comes from
+  `/chosen` security-status.
+- `America/Sao_Paulo` is not in this root's zoneinfo; localtime stays US/Pacific
+  until changed in Settings.
+
+Boot image for the first userland boot:
+`MODE=ios bash build-a05s/boot-probe.sh xnu-kernel.zip A05S-ios1`
+(17.7 MB, v4, cmdline has `cpus=4 ufsrw=1 rootrw=1 launchd_unsecure_cache=1`).
+
 ## Current state / next
 
-- **Blocker:** `userdata` still holds Android. Next: build the iOS 16.5
-  (iPhone X, 20F66) HFS+ root and flash it to `userdata` (destructive).
+- **Blocker:** `userdata` still holds Android. Next: flash the iOS root to
+  `userdata` (**destructive**, erases Android data) and boot the `MODE=ios`
+  image.
 - The iOS root is built from `rootfs/` (IPSW members):
   `OS` = `096-04088-077` (UDIF/lzfse, opened directly by the local
   `apfs-fuse` fork), `Cryptex1,SystemOS` = `096-04666-078` (raw APFS),

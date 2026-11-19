@@ -31,3 +31,4 @@ device-tree.dtb
 device-tree.dts
 rootfs/
 research/ipsw-x/
+xnu-kernel.zip
