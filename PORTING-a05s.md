@@ -68,6 +68,7 @@ Boot image for the first userland boot:
 | 9 | 2026-11-19 | `a05s-touch5.img` = `1031` AHB probe | Reset pin readback `rst cfg=0x280 io=0x3` (output, drive 2, high) and pins/loopback unchanged, so GPIO 86 is good. All AHB reads returned `00` on every CS, but **the probe was invalid**: `1031` encoded the AHB address big-endian while the vendor's `hx_parse_assign_cmd()` is **little-endian** (`cmd[0] = addr & 0xFF`). The event stack read is a single-byte command so it was valid; an idle event stack is zero, so it does not prove the FW is missing either. `1032` fixes the byte order and the printed FW-version value (LE). |
 | 10 | 2026-11-19 | `a05s-touch6.img` = `1032` (LE AHB) | **Byte order was the bug.** CS0 returned `2a b0 cf ee` (`0xEECFB02A`) on the FW-version register; CS1/2/3 stayed zero. CS0 is the **ilitek@0** socket on this bus (the DTS also has chipone@1 and himax@2), so the answer may be the Ilitek chip or floating MISO; the Himax on **CS2** still does not answer the AHB, which matches the zero-flash bootloader. The event stack is a single-byte command and was always valid. No touch events in the log. |
 | 11 | 2026-11-19 | `a05s-touch7.img` = `1033` zero-flash download + `boot-probe --blob a05sfw=...` (untested) | **First real fix attempt.** `boot-probe.sh` now adds `research/fw-a05s/hx83112f_TXD_FW.bin` to the payload (not git); the kernel finds it at `/chosen/memory-map a05sfw` and runs: AHB system reset `0x55`, sense-off, burst-on, 64 KiB FW entity to `0x20000000`, merged config to `0x10006a00`, reload-disable `0x9AA9`, `CTRL_FW=0`, GPIO 86 reset, reload `0xEC`, wait for `C072`, then read the FW version and the event stack. Payload verified locally: `a05sfw = (0x82600000, 131072)`. |
+| 12 | 2026-11-19 | `1034-a05s-upm6918-charging.patch` (untested) | **Charging.** The A05s gauge is the same **SM5602** (0x71) as topaz, but on **SE2**; the 0091+0991 `SweetBattery` already probes SE1 then SE2, so the percentage should work. The charger is the **UPM6918** at **SE1 0x6B** (DT `upm6918-charger@6b`). `1034` adds `sweet_a05s_charger_enable()` to `sweet_i2c1.c`: verifies the chip, prints REG00/01/02/04/05, clears `ENHIZ`, sets `CHG_CONFIG`+`WDT_RESET`, clears `OTG`, and disables the watchdog (REG05 bits 5:4); the touch loop kicks REG01 every 30 s as insurance. Called from `a05s_touch_bringup`. If REG00 has HIZ set (input suspended) and/or the WDT was running, this is exactly why iOS stopped charging. |
 
 ## Current state / next
 
@@ -157,8 +158,15 @@ Boot image for the first userland boot:
   above. Do **not** commit `research/fw-a05s/hx83112f_TXD_FW.bin`; install it
   into the iOS root image at build time and read it from the mounted root.
 - **GPU** (Adreno 610), **audio** (APR/Elite on ADSP), **Wi-Fi** (WCN),
-  **battery** (SM5602), **USB live log**: all rain code should mostly port, but
-  none has been run on the A05s yet.
+  **USB live log**: all rain code should mostly port, but none has been run on
+  the A05s yet.
+- **Battery/charging**: gauge = SM5602 0x71 on **SE2** (topaz `SweetBattery`
+  0091+0991 already probes SE1/SE2); charger = **UPM6918** 0x6B on **SE1**.
+  `1034` enables charging (HIZ off, CHG on, WDT disabled) and kicks it from the
+  touch loop. iOS may still display "not charging" because the topaz battery
+  code reads the old bq25890 status at 0x6A; the percentage/mV/current should
+  rise. Next: map UPM6918 REG08/09 status into `SweetBattery::pollTopaz` so
+  the UI shows the charging state too.
 - The kernel is stored in `boot`; the stock backup is
   `/media/MiguelTheDRMR/HDMig/a05s_stock_extract/base_images/boot.img`
   (same build as the phone: the fetched `vendor_boot` matched the stock
