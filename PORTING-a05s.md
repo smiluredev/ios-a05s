@@ -66,6 +66,11 @@ Boot image for the first userland boot:
 - `userdata` now holds the iOS 16.5 HFS+ root and the first boot completed.
   The root is 16 GiB inside a 116.6 GB partition; it needs `hfs-grow` (GPU
   userland) later to use the rest.
+- **Blocker (2026-11-18)**: the local touch commit is not pushed. This agent
+  host has no `gh` and no GitHub credential (`git push` asks for a username;
+  `~/.ssh/id_ed25519` is not authorized for the repo). Unblock with
+  `git push origin rain` from an authenticated shell, then run `xnu.yml` on
+  `rain` (GitHub UI "Run workflow" or `gh workflow run xnu.yml --ref rain`).
 - **Touch (Himax hx83112f), first attempt ready.** Patch
   `xnu/patches/0997-a05s-himax-touch.patch` adds an A05s branch to the rain
   `sweet_touch.c`. Boot with `raintouch=1 a05stouch=1`: it uses the rain
