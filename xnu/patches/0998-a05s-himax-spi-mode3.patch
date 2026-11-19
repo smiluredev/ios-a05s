@@ -1,0 +1,43 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -1557,8 +1557,8 @@
+ 	touch_wait(10);
+ 	touch_gpio(HX_GPIO_RST, 0, 0, 2, true, true);
+ 	touch_wait(100);
+-	printf("A05S TOUCH: se0 fw=%#x ifdis=%#x hwtx=%#x hwrx=%#x gpi=%d cpha=%#x demux=%#x mclk=%#x\n",
+-	    rn.fw, rn.ifdis, rn.hwtx, rn.hwrx, rg.mem != 0, rn.c_cpha, rn.c_demux, rn.c_mclk);
++	printf("A05S TOUCH: se0 fw=%#x ifdis=%#x hwtx=%#x hwrx=%#x gpi=%d cpha=%#x cpol=%#x demux=%#x mclk=%#x\n",
++	    rn.fw, rn.ifdis, rn.hwtx, rn.hwrx, rg.mem != 0, rn.c_cpha, rn.c_cpol, rn.c_demux, rn.c_mclk);
+ 	for (int t = 0; t < 10 && e; t++) {
+ 		e = himax_read(HX_EVENT_STACK, buf, sizeof(buf));
+ 		if (e) {
+@@ -1583,7 +1583,7 @@
+ a05s_touch_run(void)
+ {
+ 	uint8_t buf[HX_REPORT_SZ];
+-	unsigned errs = 0, bad = 0;
++	unsigned errs = 0, bad = 0, tick = 0;
+ 
+ 	printf("A05S TOUCH: himax polling every 10 ms, 1080x2400\n");
+ 	for (;;) {
+@@ -1621,6 +1621,11 @@
+ 		if (n > HX_MAX_PT) {
+ 			n = HX_MAX_PT;
+ 		}
++		if (++tick % 100u == 0) {
++			printf("A05S TOUCH: poll %u n=%u sum=%#x xy=%02x%02x,%02x%02x state=%02x %02x %02x %02x\n",
++			    tick, n, sum, buf[0], buf[1], buf[2], buf[3],
++			    buf[52], buf[53], buf[54], buf[55]);
++		}
+ 		for (unsigned i = 0; i < n; i++) {
+ 			unsigned px = ((unsigned)buf[i * 4] << 8) | buf[i * 4 + 1];
+ 			unsigned py = ((unsigned)buf[i * 4 + 2] << 8) | buf[i * 4 + 3];
+@@ -1835,7 +1840,7 @@
+ 	touch_wr(rn.se, SE_CLK_SEL, 0);
+ 	touch_wr(rn.se, SE_MCLK, ((a05s_touch ? 2u : 16u) << 4) | 1u); /* 19.2 MHz / div */
+ 	touch_wr(rn.se, RAIN_SPI_CPHA, a05s_touch ? 1u : 0u); /* a05s: CPHA=1, rain: mode 0 */
+-	touch_wr(rn.se, RAIN_SPI_CPOL, 0);
++	touch_wr(rn.se, RAIN_SPI_CPOL, a05s_touch ? 4u : 0u); /* a05s: SPI_MODE_3, CPOL is bit 2 */
+ 	touch_wr(rn.se, RAIN_SPI_LOOPBACK, 0);
+ 	touch_wr(rn.se, RAIN_SPI_DEMUXSEL, a05s_touch ? 2u : 0u); /* a05s: CS2, rain: CS0 */
+ 	touch_wr(rn.se, RAIN_SPI_DEMUXINV, 0);

@@ -61,7 +61,7 @@ Boot image for the first userland boot:
 
 | 4 | 2026-11-18 | same boot, left running (~11 min) | **Milestone 2: iOS 16.5 lock screen on the A05s.** The first boot completed (data volume created); the lock screen is drawn on the 1080x2400 panel through the topaz display path. Touch is off (`sweettouch=0`, no Himax driver), GPU is off (no `gpu=1`/userland), so the UI is CPU-rendered and not interactive yet. |
 
-| 5 | 2026-11-18 | `a05s-touch1.img` = CI kernel with `0997` + `MODE=ios ... raintouch=1 a05stouch=1 sweetusb=3` | **Touch probe runs, but no touch.** Log: `A05S TOUCH: se0 fw=0x102 ifdis=0 hwtx=0x20102964 hwrx=0x20204800 gpi=0 cpha=0x1 demux=0x2 mclk=0x21`; `himax event-stack read e=0 00 00 00 00 00 00 00`. The A05s SE0 is in FIFO mode (`ifdis=0`), not GPI-DMA, and the rain `rain_spi` FIFO path wrote `SE_CMD` before the TX FIFO. `0998` preloads the FIFO and adds a 1 s poll heartbeat; pending rebuild/test. |
+| 5 | 2026-11-18 | `a05s-touch1.img` = CI kernel with `0997` + `MODE=ios ... raintouch=1 a05stouch=1 sweetusb=3` | **Touch probe runs, but no touch.** Log: `A05S TOUCH: se0 fw=0x102 ifdis=0 hwtx=0x20102964 hwrx=0x20204800 gpi=0 cpha=0x1 demux=0x2 mclk=0x21`; `himax event-stack read e=0 00 00 00 00 00 00 00`. The A05s SE0 is in FIFO mode (`ifdis=0`), not GPI-DMA. Root cause found in the vendor source: `himax_platform.c` sets `spi->mode = SPI_MODE_3` (CPOL=1), but we had CPOL=0; the GENI CPOL is bit 2 (write 4, not 1). A FIFO TX-preload attempt (0998 draft) made the SE hang, so it was reverted. |
 
 ## Current state / next
 
@@ -72,12 +72,14 @@ Boot image for the first userland boot:
   rain `sweet_touch.c`: `raintouch=1 a05stouch=1`, SE0 CS2/CPHA=1/9.6 MHz,
   reset GPIO 86, event stack `0x30`, 56-byte HX83112F report. The kernel
   booted to the lock screen and the probe ran, but the event stack read was
-  all-zero. The log showed `gpi=0 ifdis=0`: the A05s SE0 is in **FIFO mode**,
-  and the rain `rain_spi` FIFO path wrote `SE_CMD` before the TX FIFO, so the
-  Himax never saw the `F3 30 00` read command. `0998-a05s-himax-fifo-fix.patch`
-  preloads the TX FIFO and prints a 1 s `poll n= sum=` heartbeat; rebuild and
-  boot with the same args. If the heartbeat stays zero, the next checks are
-  the CS2 pin/DEMUX, the GPIO 86 reset/power rail and the IC flash FW.
+  all-zero. The A05s SE0 is in **FIFO mode** (`gpi=0 ifdis=0`). The vendor
+  source (`research/himax/himax_platform.c:1362`) sets `spi->mode = SPI_MODE_3`
+  (CPOL=1, CPHA=1); we had CPOL=0. In the GENI the CPOL field is bit 2, so the
+  register value is `4`, not `1`. `0998-a05s-himax-spi-mode3.patch` sets
+  CPOL=4 and adds a 1 s `poll n= sum= xy= state=` heartbeat. A TX-FIFO preload
+  was tried and reverted: the GENI hangs if TX is written before `SE_CMD`.
+  Rebuild/boot with the same args; if the heartbeat stays all-zero, check the
+  CS2 pin/DEMUX, GPIO 86 reset/power rail and the IC flash FW.
 - GPU (Adreno 610 / Mesa freedreno userland + A05s zap firmware) is the other
   big win: the CPU renderer is slow.
 - Live log: `build-a05s/a05s-A05S-dbg1.img` (`sweetusb=3 sweetfps=1`) is ready
@@ -102,9 +104,9 @@ Boot image for the first userland boot:
   and matches, but no DSC programming exists. The console (splash FB) works;
   the AppleCLCD/iOS scanout path is untested. `sweetfb_noshadow=1` is still used
   for the first boots.
-- **Touch**: `0997` (probe) + `0998` (FIFO TX preload + heartbeat) are in the
-  A05s series; the FIFO fix is not booted yet. If the event stack still reads
-  all-zero/0xFF, the next step is the Himax flash download (vendor
+- **Touch**: `0997` (probe) + `0998` (SPI mode 3 / CPOL=4 + heartbeat) are in
+  the A05s series; the CPOL fix is not booted yet. If the event stack still
+  reads all-zero/0xFF, the next step is the Himax flash download (vendor
   `hx83112f_TXD_FW.bin`) or checking that the IC's power rail is on.
 - **GPU** (Adreno 610), **audio** (APR/Elite on ADSP), **Wi-Fi** (WCN),
   **battery** (SM5602), **USB live log**: all rain code should mostly port, but
