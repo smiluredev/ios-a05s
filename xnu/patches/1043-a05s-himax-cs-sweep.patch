@@ -1,0 +1,23 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -1903,6 +1903,20 @@
+ 		touch_wait(100);
+ 	}
+ 	{
++		uint32_t cs;
++		for (cs = 0; cs < 4u; cs++) {
++			uint8_t q[4];
++			touch_wr(rn.se, RAIN_SPI_DEMUXSEL, cs);
++			bzero(q, sizeof(q));
++			printf("A05S TOUCH: cs%u start\n", cs);
++			(void)himax_ahb_read_dbg(0x10000000u, q, 4);
++			printf("A05S TOUCH: cs%u cid %02x %02x %02x %02x\n",
++			    cs, q[0], q[1], q[2], q[3]);
++			touch_wait(100);
++		}
++		touch_wr(rn.se, RAIN_SPI_DEMUXSEL, 2u);
++	}
++	{
+ 		uint8_t r[16];
+ 		bzero(r, sizeof(r));
+ 		(void)himax_ahb_read(HX_CTRL_FW, r, 4);
