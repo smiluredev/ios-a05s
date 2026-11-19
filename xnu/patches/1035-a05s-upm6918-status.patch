@@ -1,0 +1,66 @@
+--- a/iokit/Kernel/arm/SweetBattery.cpp
++++ b/iokit/Kernel/arm/SweetBattery.cpp
+@@ -22,6 +22,7 @@
+ extern "C" int sweet_i2c1_write(uint8_t addr, uint8_t reg, uint8_t val);
+ extern "C" int sweet_i2c_bus_read(int bus, uint8_t addr, uint8_t reg, uint8_t *buf, unsigned len);
+ extern "C" int sweet_i2c_bus_write(int bus, uint8_t addr, uint8_t reg, uint8_t val);
++extern "C" int sweet_a05s_charger_enable(void);
+ 
+ /*
+  * rain: without Android's smb1351 driver the charger stays in its USB default (~500 mA), less
+@@ -429,10 +430,21 @@
+ 	cur = (uint16_t)(w[0] | w[1] << 8);
+ 	bool fullOk = gauge_read(0x71, 0x62, w, 2) == 0;
+ 	full = fullOk ? (uint16_t)(w[0] | w[1] << 8) : 0;
+-	bool chgOk = sweet_i2c1_read(0x6a, 0x0b, &st, 1) == 0;
++	/* A05s: UPM6918 at SE1 0x6b, REG08 (VBUS_STAT[7:5], CHRG_STAT[4:3],
++	 * PG_STAT[2]). Fall back to the topaz bq25890 at 0x6a and then to the
++	 * rain SMB1351 when 0x6b does not answer. */
++	uint8_t st8 = 0;
++	bool chgOk = sweet_i2c1_read(0x6b, 0x08, &st8, 1) == 0;
++	bool topazOk = false;
++	if (chgOk) {
++		st = st8;
++	} else {
++		topazOk = sweet_i2c1_read(0x6a, 0x0b, &st, 1) == 0;
++		chgOk = topazOk;
++	}
+ 	bool texOk = gauge_read(0x71, 0x0a, w, 2) == 0;
+ 	int tenths = texOk ? topaz_ntc_tenths((uint16_t)(w[0] | w[1] << 8)) : 250;
+-	if (chgOk && texOk) {
++	if (topazOk && texOk) {
+ 		topaz_charger(st, tenths);
+ 	}
+ 
+@@ -447,7 +459,8 @@
+ 		return false;
+ 	}
+ 	unsigned vbus = (st >> 5) & 7u, chrg = (st >> 3) & 3u;
+-	bool external = chgOk && vbus >= 1 && vbus <= 6 && (st & 4u);
++	bool pg = (st & 4u) != 0;
++	bool external = chgOk && pg && vbus >= 1 && vbus <= 6;
+ 	bool charging = external && (chrg == 1 || chrg == 2);
+ 	bool done = external && chrg == 3;
+ 	if (!chgOk) {
+@@ -456,8 +469,8 @@
+ 	publish(done ? 100 : percent, mv, ma, external, external, charging, done, true, true);
+ 	static unsigned logs;
+ 	if (logs++ % 20 == 0) {
+-		IOLog("SWEET BATTERY: topaz %u%% %umV %dmA full=%umAh chg=%#x external=%d charging=%d\n",
+-		    percent, mv, ma, fullMah, st, external, charging);
++		IOLog("SWEET BATTERY: topaz %u%% %umV %dmA full=%umAh chg=%#x (upm=%d topaz=%d) external=%d charging=%d\n",
++		    percent, mv, ma, fullMah, st, chgOk && !topazOk, topazOk, external, charging);
+ 	}
+ 	return true;
+ }
+@@ -589,6 +602,10 @@
+ 	int real = 1;   /* topaz: real gauge by default; sweetbattery=0 for the static fallback */
+ 	(void)PE_parse_boot_argn("sweetbattery", &real, sizeof(real));
+ 	fReal = real == 1 && sweet_i2c1_init() == 0;
++	if (fReal) {
++		/* A05s UPM6918: enable the charge path before the first poll publishes. */
++		(void)sweet_a05s_charger_enable();
++	}
+ 	/* Publish a complete source BEFORE registerService wakes powerd. */
+ 	poll();
+ 	if (fReal) {

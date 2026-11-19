@@ -69,6 +69,8 @@ Boot image for the first userland boot:
 | 10 | 2026-11-19 | `a05s-touch6.img` = `1032` (LE AHB) | **Byte order was the bug.** CS0 returned `2a b0 cf ee` (`0xEECFB02A`) on the FW-version register; CS1/2/3 stayed zero. CS0 is the **ilitek@0** socket on this bus (the DTS also has chipone@1 and himax@2), so the answer may be the Ilitek chip or floating MISO; the Himax on **CS2** still does not answer the AHB, which matches the zero-flash bootloader. The event stack is a single-byte command and was always valid. No touch events in the log. |
 | 11 | 2026-11-19 | `a05s-touch7.img` = `1033` zero-flash download + `boot-probe --blob a05sfw=...` (untested) | **First real fix attempt.** `boot-probe.sh` now adds `research/fw-a05s/hx83112f_TXD_FW.bin` to the payload (not git); the kernel finds it at `/chosen/memory-map a05sfw` and runs: AHB system reset `0x55`, sense-off, burst-on, 64 KiB FW entity to `0x20000000`, merged config to `0x10006a00`, reload-disable `0x9AA9`, `CTRL_FW=0`, GPIO 86 reset, reload `0xEC`, wait for `C072`, then read the FW version and the event stack. Payload verified locally: `a05sfw = (0x82600000, 131072)`. |
 | 12 | 2026-11-19 | `1034-a05s-upm6918-charging.patch` (untested) | **Charging.** The A05s gauge is the same **SM5602** (0x71) as topaz, but on **SE2**; the 0091+0991 `SweetBattery` already probes SE1 then SE2, so the percentage should work. The charger is the **UPM6918** at **SE1 0x6B** (DT `upm6918-charger@6b`). `1034` adds `sweet_a05s_charger_enable()` to `sweet_i2c1.c`: verifies the chip, prints REG00/01/02/04/05, clears `ENHIZ`, sets `CHG_CONFIG`+`WDT_RESET`, clears `OTG`, and disables the watchdog (REG05 bits 5:4); the touch loop kicks REG01 every 30 s as insurance. Called from `a05s_touch_bringup`. If REG00 has HIZ set (input suspended) and/or the WDT was running, this is exactly why iOS stopped charging. |
+| 13 | 2026-11-19 | `1035-a05s-upm6918-status.patch` (untested) | **Charging indicator.** `SweetBattery::pollTopaz` now reads the UPM6918 **REG08** at **SE1 0x6B** first: `VBUS_STAT`[7:5] (1 SDP / 2 CDP / 3 DCP / 5 unknown / 6 non-std), `CHRG_STAT`[4:3] (0 idle / 1 precharge / 2 fast / 3 done), `PG_STAT`[2], and publishes external/charging/full from it. If 0x6B is absent it falls back to the topaz bq25890 at 0x6A (and still runs `topaz_charger`), then to the rain SMB1351. `start()` also calls `sweet_a05s_charger_enable()` before the first poll. Log line now prints `(upm=%d topaz=%d)`. |
+
 
 ## Current state / next
 
@@ -165,8 +167,7 @@ Boot image for the first userland boot:
   `1034` enables charging (HIZ off, CHG on, WDT disabled) and kicks it from the
   touch loop. iOS may still display "not charging" because the topaz battery
   code reads the old bq25890 status at 0x6A; the percentage/mV/current should
-  rise. Next: map UPM6918 REG08/09 status into `SweetBattery::pollTopaz` so
-  the UI shows the charging state too.
+  rise.
 - The kernel is stored in `boot`; the stock backup is
   `/media/MiguelTheDRMR/HDMig/a05s_stock_extract/base_images/boot.img`
   (same build as the phone: the fetched `vendor_boot` matched the stock
