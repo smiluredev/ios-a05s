@@ -1,0 +1,78 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -1568,6 +1568,8 @@
+ #define HX_FW_RELOAD2    0x100072c0u
+ #define HX_FW_TABLE      0x10400u
+ #define HX_FW_MAXPTR     10u
++#define HX_TCON_ON_RST   0x80020020u
++#define HX_ADC_ON_RST    0x80020094u
+ 
+ static void
+ hx_put_be32(uint8_t *p, uint32_t v)
+@@ -1793,21 +1795,41 @@
+ static int
+ himax_download(void)
+ {
+-	uint8_t v[4], d;
++	uint8_t v[4], off[2] = { 0x27u, 0x95u };
+ 	unsigned i, ok = 0;
+ 	int e;
+ 
+ 	printf("A05S TOUCH: fw download start\n");
+ 	(void)himax_ahb_write(HX_SYSTEM_RESET, 0x00000055u);
+ 	touch_wait(20);
+-	{
+-		uint8_t off[2] = { 0x27u, 0x95u };
++	/* Vendor sense_off(): stop the FW, then enter safe mode. */
++	(void)himax_ahb_write(HX_CTRL_FW, 0x000000a5u);
++	touch_wait(20);
++	(void)himax_write_raw(0x31u, NULL, off, 2);
++	touch_wait(20);
++	/* Vendor waits for ADDR_CS_CENTRAL_STATE == 0x0C; if it is not there,
++	 * pin-reset and retry. The old code sent 0x31 {0} here (the reset
++	 * sequence's second step), which exits the safe mode instead. */
++	for (i = 0; i < 5u; i++) {
++		bzero(v, sizeof(v));
++		(void)himax_ahb_read(HX_CHK_FW_STATUS, v, 4);
++		printf("A05S TOUCH: safe-mode state=%02x %02x\n", v[0], v[1]);
++		if (v[0] == 0x0cu) {
++			(void)himax_ahb_write(HX_TCON_ON_RST, 0);
++			touch_wait(1);
++			(void)himax_ahb_write(HX_ADC_ON_RST, 0);
++			touch_wait(1);
++			(void)himax_ahb_write(HX_ADC_ON_RST, 1);
++			break;
++		}
++		touch_gpio(HX_GPIO_RST, 0, 0, 2, true, false);
++		touch_wait(2);
++		touch_gpio(HX_GPIO_RST, 0, 0, 2, true, true);
++		touch_wait(50);
+ 		(void)himax_write_raw(0x31u, NULL, off, 2);
++		touch_wait(20);
+ 	}
+-	touch_wait(20);
+-	d = 0x00u;
+-	(void)himax_write_raw(0x31u, NULL, &d, 1);
+-	touch_wait(10);
++	printf("A05S TOUCH: safe-mode done i=%u\n", i);
+ 
+ 	himax_burst(1);
+ 	e = himax_write_sram(hx_fw_pa, hx_fw + hx_fw_off, hx_fw_sz);
+@@ -1835,6 +1857,7 @@
+ 	touch_wait(50);
+ 
+ 	(void)himax_ahb_write(HX_RELOAD_ACTIVE, 0x000000ecu);
++	touch_wait(1);
+ 	for (i = 0; i < 30u; i++) {
+ 		bzero(v, sizeof(v));
+ 		(void)himax_ahb_read(HX_RELOAD_ACTIVE, v, 4);
+@@ -1844,7 +1867,8 @@
+ 		}
+ 		touch_wait(10);
+ 	}
+-	printf("A05S TOUCH: reload active ok=%u tries=%u\n", ok, i);
++	printf("A05S TOUCH: reload active ok=%u tries=%u v=%02x %02x %02x %02x\n",
++	    ok, i, v[0], v[1], v[2], v[3]);
+ 	for (i = 0; i < 30u; i++) {
+ 		bzero(v, sizeof(v));
+ 		(void)himax_ahb_read(HX_FW_RELOAD2, v, 4);
