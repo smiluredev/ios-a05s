@@ -1,0 +1,83 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -1222,7 +1222,7 @@
+ 		touch_wr(se, SE_TX, w);
+ 	}
+ 	unsigned got = 0;
+-	for (unsigned spin = 0; spin < 200000; spin++) {
++	for (unsigned spin = 0; spin < 5000; spin++) {
+ 		uint32_t irq = touch_rd(se, SE_IRQ);
+ 		while (op == RAIN_OP_FULL && got < n && (touch_rd(se, SE_RX_COUNT) & 0x1ffffffu)) {
+ 			uint32_t w = touch_rd(se, SE_RX);
+@@ -1553,6 +1553,17 @@
+ 	bzero(buf, sizeof(buf));
+ 
+ 	rn.stage = "himax reset";
++	printf("A05S TOUCH: pins=%#x %#x %#x %#x\n",
++	    rn.pin_after[0], rn.pin_after[1], rn.pin_after[2], rn.pin_after[3]);
++	{
++		static const uint8_t pat[8] = { 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88 };
++		uint8_t lb[8];
++		touch_wr(rn.se, RAIN_SPI_LOOPBACK, 1);
++		int le = rain_spi(RAIN_OP_FULL, pat, lb, sizeof(pat));
++		touch_wr(rn.se, RAIN_SPI_LOOPBACK, 0);
++		printf("A05S TOUCH: fifo loopback e=%d %02x %02x %02x %02x %02x %02x %02x %02x\n",
++		    le, lb[0], lb[1], lb[2], lb[3], lb[4], lb[5], lb[6], lb[7]);
++	}
+ 	touch_gpio(HX_GPIO_RST, 0, 0, 2, true, false);
+ 	touch_wait(10);
+ 	touch_gpio(HX_GPIO_RST, 0, 0, 2, true, true);
+@@ -1584,12 +1595,20 @@
+ {
+ 	uint8_t buf[HX_REPORT_SZ];
+ 	unsigned errs = 0, bad = 0, tick = 0;
++	int last_e = 0;
++	unsigned last_sum = 0, last_n = 0;
++
++	bzero(buf, sizeof(buf));
+ 
+ 	printf("A05S TOUCH: himax polling every 10 ms, 1080x2400\n");
+ 	for (;;) {
+ 		int x[TOUCH_MAX] = {0}, y[TOUCH_MAX] = {0};
+ 		uint32_t mask = 0;
+ 
++		if (++tick % 100u == 0) {
++			printf("A05S TOUCH: poll %u last_e=%d last_sum=%#x last_n=%u errs=%u state=%02x %02x %02x %02x\n",
++			    tick, last_e, last_sum, last_n, errs, buf[52], buf[53], buf[54], buf[55]);
++		}
+ 		if (rain_panel_off) {
+ 			touch_report(0, st.x, st.y);
+ 			touch_wait(50);
+@@ -1597,9 +1616,13 @@
+ 		}
+ 		int e = himax_read(HX_EVENT_STACK, buf, sizeof(buf));
+ 		if (e) {
++			if (errs < 3 || errs % 100u == 0) {
++				printf("A05S TOUCH: read err=%d errs=%u\n", e, errs);
++			}
+ 			if (++errs == 10) {
+ 				touch_report(0, st.x, st.y);
+ 			}
++			last_e = e;
+ 			touch_wait(10);
+ 			continue;
+ 		}
+@@ -1617,15 +1640,13 @@
+ 			continue;
+ 		}
+ 		bad = 0;
++		last_e = 0;
++		last_sum = sum;
+ 		unsigned n = buf[HX_REPORT_SZ - 4] & 0x0fu;
+ 		if (n > HX_MAX_PT) {
+ 			n = HX_MAX_PT;
+ 		}
+-		if (++tick % 100u == 0) {
+-			printf("A05S TOUCH: poll %u n=%u sum=%#x xy=%02x%02x,%02x%02x state=%02x %02x %02x %02x\n",
+-			    tick, n, sum, buf[0], buf[1], buf[2], buf[3],
+-			    buf[52], buf[53], buf[54], buf[55]);
+-		}
++		last_n = n;
+ 		for (unsigned i = 0; i < n; i++) {
+ 			unsigned px = ((unsigned)buf[i * 4] << 8) | buf[i * 4 + 1];
+ 			unsigned py = ((unsigned)buf[i * 4 + 2] << 8) | buf[i * 4 + 3];
