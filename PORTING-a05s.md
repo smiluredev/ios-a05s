@@ -59,13 +59,22 @@ Boot image for the first userland boot:
 
 | 3 | 2026-11-18 | `boot` = `MODE=ios` image (`cpus=4 ufsrw=1 rootrw=1 launchd_unsecure_cache=1`); `fastboot -S 256M flash userdata research/ipsw/ios16-root.img` (47/47 sparse chunks, 479.9 s; partition 116.6 GB), then `fastboot reboot` | **iOS userland starts.** The Apple logo is drawn on the 1080x2400 panel (display path works with the panel's DSC as left by ABL). First boot in progress; the lock screen is the next expected step. The fastboot "avb footer" warning is harmless (the client miscomputes the sparse image size; every write returned OKAY). |
 
+| 4 | 2026-11-18 | same boot, left running (~11 min) | **Milestone 2: iOS 16.5 lock screen on the A05s.** The first boot completed (data volume created); the lock screen is drawn on the 1080x2400 panel through the topaz display path. Touch is off (`sweettouch=0`, no Himax driver), GPU is off (no `gpu=1`/userland), so the UI is CPU-rendered and not interactive yet. |
+
 ## Current state / next
 
-- `userdata` now holds the iOS 16.5 HFS+ root. The root is 16 GiB inside a
-  116.6 GB partition; it needs `hfs-grow` (GPU userland) later to use the rest.
-- Next: wait for the first boot (data volume creation, ~5-15 min at 4 cores).
-  If it stalls on the Apple logo, debug with a `sweetusb=3` live-log kernel
-  and/or `sweetfb_noshadow=0` (flip buffers), then touch (Himax), GPU, audio.
+- `userdata` now holds the iOS 16.5 HFS+ root and the first boot completed.
+  The root is 16 GiB inside a 116.6 GB partition; it needs `hfs-grow` (GPU
+  userland) later to use the rest.
+- **Next enabler: touch (Himax hx83112f).** Without it the lock screen cannot
+  be unlocked. Reuse the rain SPI/GPI-DMA transport and `sweet_hid_touch`;
+  implement the Himax `hxcommon` protocol (CS2, CPHA=1) and upload the A05s
+  vendor firmware.
+- GPU (Adreno 610 / Mesa freedreno userland + A05s zap firmware) is the other
+  big win: the CPU renderer is slow.
+- Live log: `build-a05s/a05s-A05S-dbg1.img` (`sweetusb=3 sweetfps=1`) is ready
+  for the next debug boot; 16.5 root is already initialized, so it should
+  reach the lock screen faster.
 - The iOS root is built from `rootfs/` (IPSW members):
   `OS` = `096-04088-077` (UDIF/lzfse, opened directly by the local
   `apfs-fuse` fork), `Cryptex1,SystemOS` = `096-04666-078` (raw APFS),
