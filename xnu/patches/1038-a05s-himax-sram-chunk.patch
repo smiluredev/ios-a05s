@@ -1,0 +1,16 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -1780,9 +1780,10 @@
+ 		uint8_t a[4];
+ 		int e;
+ 
+-		if (n > 60u) {
+-			n = 60u;
+-		}
++		/* rain_spi() accepts at most 64 bytes, header included. */
++		if (n > 56u) {
++			n = 56u;
++		}
+ 		n &= ~3u;
+ 		if (!n) {
+ 			return -1;
