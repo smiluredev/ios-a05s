@@ -1,2 +1,5 @@
 #!/bin/sh
-exec llvm-readelf "$@"
+for t in llvm-readelf llvm-readelf-17 llvm-readelf-15 /usr/lib/llvm-17/bin/llvm-readelf /usr/lib/llvm-15/bin/llvm-readelf; do
+	command -v "$t" >/dev/null 2>&1 && exec "$t" "$@"
+done
+echo "aarch64-linux-gnu-readelf: no llvm-readelf found" >&2; exit 127

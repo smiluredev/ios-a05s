@@ -1,2 +1,7 @@
 #!/bin/sh
-exec llvm-nm "$@"
+# LLVM here ships versioned binaries (llvm-nm-17); fall back to the versioned
+# name and to the distro's llvm bin directories.
+for t in llvm-nm llvm-nm-17 llvm-nm-15 /usr/lib/llvm-17/bin/llvm-nm /usr/lib/llvm-15/bin/llvm-nm; do
+	command -v "$t" >/dev/null 2>&1 && exec "$t" "$@"
+done
+echo "aarch64-linux-gnu-nm: no llvm-nm found" >&2; exit 127

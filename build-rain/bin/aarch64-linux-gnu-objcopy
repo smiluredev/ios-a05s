@@ -1,2 +1,5 @@
 #!/bin/sh
-exec llvm-objcopy "$@"
+for t in llvm-objcopy llvm-objcopy-17 llvm-objcopy-15 /usr/lib/llvm-17/bin/llvm-objcopy /usr/lib/llvm-15/bin/llvm-objcopy; do
+	command -v "$t" >/dev/null 2>&1 && exec "$t" "$@"
+done
+echo "aarch64-linux-gnu-objcopy: no llvm-objcopy found" >&2; exit 127
