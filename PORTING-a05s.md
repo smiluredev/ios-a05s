@@ -66,10 +66,16 @@ Boot image for the first userland boot:
 - `userdata` now holds the iOS 16.5 HFS+ root and the first boot completed.
   The root is 16 GiB inside a 116.6 GB partition; it needs `hfs-grow` (GPU
   userland) later to use the rest.
-- **Next enabler: touch (Himax hx83112f).** Without it the lock screen cannot
-  be unlocked. Reuse the rain SPI/GPI-DMA transport and `sweet_hid_touch`;
-  implement the Himax `hxcommon` protocol (CS2, CPHA=1) and upload the A05s
-  vendor firmware.
+- **Touch (Himax hx83112f), first attempt ready.** Patch
+  `xnu/patches/0997-a05s-himax-touch.patch` adds an A05s branch to the rain
+  `sweet_touch.c`. Boot with `raintouch=1 a05stouch=1`: it uses the rain
+  SE0/GPI-DMA transport with CS2, CPHA=1 and 9.6 MHz, pin-resets the IC on
+  GPIO 86, then polls the event stack (`0x30`) and parses the 56-byte
+  HX83112F report (10 fingers, x/y big-endian, checksum, finger count in the
+  last word). No firmware upload: the vendor driver keeps the FW in the IC's
+  own flash, so a pin reset should bring it back. Pending: CI kernel build and
+  the first boot with a `MODE=ios` image; the live log (`sweetusb=3`) will
+  show `A05S TOUCH:` lines.
 - GPU (Adreno 610 / Mesa freedreno userland + A05s zap firmware) is the other
   big win: the CPU renderer is slow.
 - Live log: `build-a05s/a05s-A05S-dbg1.img` (`sweetusb=3 sweetfps=1`) is ready
@@ -85,6 +91,8 @@ Boot image for the first userland boot:
 - Kernel artifact used for #2 predates `0999`; rebuilding with the current
   `xnu/patches` is recommended for the record (the 0999 UFSHCI sanity check is
   harmless on the real UFS).
+- Touch patch `0997` is in the same series; its first kernel build and boot
+  test are the next milestone.
 
 ## Not started / open
 
@@ -92,9 +100,10 @@ Boot image for the first userland boot:
   and matches, but no DSC programming exists. The console (splash FB) works;
   the AppleCLCD/iOS scanout path is untested. `sweetfb_noshadow=1` is still used
   for the first boots.
-- **Touch**: Himax `hxcommon` over SPI (CS2, CPHA=1). Reuse the rain GPI-DMA
-  SPI infrastructure, replace the Novatek protocol and firmware (extract from
-  the A05s vendor image).
+- **Touch**: draft in `0997-a05s-himax-touch.patch` (Himax event stack,
+  reset GPIO 86, CS2/CPHA=1). Not yet built or booted; the vendor FW in the
+  IC flash is assumed valid. If the event stack reads all-zero/0xFF, the next
+  step is the Himax flash download (vendor `hx83112f_TXD_FW.bin`).
 - **GPU** (Adreno 610), **audio** (APR/Elite on ADSP), **Wi-Fi** (WCN),
   **battery** (SM5602), **USB live log**: all rain code should mostly port, but
   none has been run on the A05s yet.

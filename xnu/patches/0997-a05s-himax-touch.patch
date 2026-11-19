@@ -1,0 +1,195 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -103,6 +103,7 @@
+ } st;
+ static int touch_sleep_chan;
+ static int rain_touch_on;      /* boot-arg raintouch=1: Novatek SPI probe (rain) */
++static int a05s_touch;         /* boot-arg a05stouch=1: Himax HX83112F on QUP0 SE0 CS2 */
+ 
+ static uint32_t
+ touch_rd(vm_offset_t base, uint32_t off)
+@@ -1105,7 +1106,7 @@
+ 		memset((void *)(rg.mem + RM_RXBUF), 0xa5, n);  /* untouched bytes read back as a5 */
+ 		rain_tre_dma(&rxr[rg.rx_wp % RG_NTRE], rg.pa + RM_RXBUF, n, false);
+ 	}
+-	rain_tre_config(&txr[rg.tx_wp % RG_NTRE], 16, rg.loopback);          /* 19.2 MHz / 16 */
++	rain_tre_config(&txr[rg.tx_wp % RG_NTRE], a05s_touch ? 2u : 16u, rg.loopback); /* a05s: 9.6 MHz */
+ 	rain_tre_go(&txr[(rg.tx_wp + 1u) % RG_NTRE], cmd, cmd == 3u ? n : 0);
+ 	rain_tre_dma(&txr[(rg.tx_wp + 2u) % RG_NTRE], rg.pa + RM_TXBUF, n, true);
+ 	clean_dcache64((addr64_t)rg.pa, RM_EV, TRUE);              /* both TRE rings */
+@@ -1203,7 +1204,7 @@
+ 	if (rg.mem) {
+ 		return rain_gpi_xfer(op == RAIN_OP_FULL ? 3u : 1u, tx, rx, n);
+ 	}
+-	if (n == 0 || n > 32) {
++	if (n == 0 || n > 64) {
+ 		return -1;
+ 	}
+ 	if (touch_rd(se, SE_STATUS) & 1u) {
+@@ -1509,6 +1510,132 @@
+ 	}
+ }
+ 
++/* ---- A05s: Himax HX83112F TDDI on QUP0 SE0 CS2, CPHA=1, 9.6 MHz ----------------
++ * The vendor driver keeps the touch firmware in the IC's own flash, so a pin
++ * reset is enough after iOS takes the panel. The event stack is a plain bank:
++ * [0xF3, reg, 0] then the answer, full duplex on one buffer; the first three
++ * received bytes are the command echo. HX83112F reports 10 fingers as x/y
++ * big-endian pairs, 10 weight bytes, then the finger count in the last word.
++ */
++#define HX_EVENT_STACK   0x30u
++#define HX_MAX_PT        10u
++#define HX_REPORT_SZ     ((HX_MAX_PT + (HX_MAX_PT / 4u) + 2u) * 4u)   /* 56 */
++#define HX_GPIO_RST      86u
++
++static int
++himax_read(uint8_t cmd, uint8_t *buf, unsigned len)
++{
++	uint8_t tx[3u + 64u], rx[3u + 64u];
++	if (len > 64u) {
++		return -1;
++	}
++	bzero(tx, sizeof(tx));
++	bzero(rx, sizeof(rx));
++	tx[0] = 0xf3u;                 /* HIMAX_BUS_R_CMD */
++	tx[1] = cmd;
++	/* tx[2] = 0 clocks the answer out */
++	int e = rain_spi(RAIN_OP_FULL, tx, rx, 3u + len);
++	if (!e) {
++		memcpy(buf, rx + 3, len);
++	}
++	return e;
++}
++
++static void a05s_touch_run(void);
++
++/* Vendor HX_RST_PIN_FUNC: GPIO 86 is active low. */
++static void
++a05s_touch_bringup(void)
++{
++	uint8_t buf[HX_REPORT_SZ];
++	int e = -1;
++
++	bzero(buf, sizeof(buf));
++
++	rn.stage = "himax reset";
++	touch_gpio(HX_GPIO_RST, 0, 0, 2, true, false);
++	touch_wait(10);
++	touch_gpio(HX_GPIO_RST, 0, 0, 2, true, true);
++	touch_wait(100);
++	printf("A05S TOUCH: se0 fw=%#x ifdis=%#x hwtx=%#x hwrx=%#x gpi=%d cpha=%#x demux=%#x mclk=%#x\n",
++	    rn.fw, rn.ifdis, rn.hwtx, rn.hwrx, rg.mem != 0, rn.c_cpha, rn.c_demux, rn.c_mclk);
++	for (int t = 0; t < 10 && e; t++) {
++		e = himax_read(HX_EVENT_STACK, buf, sizeof(buf));
++		if (e) {
++			touch_wait(10);
++		}
++	}
++	printf("A05S TOUCH: himax event-stack read e=%d %02x %02x %02x %02x %02x %02x %02x %02x\n",
++	    e, buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]);
++	if (e) {
++		rn.err = e;
++		return;
++	}
++	a05s_touch_run();
++}
++
++/*
++ * Every report sums to 0 mod 256. The panel is exactly 1080x2400, so the
++ * coordinates are already in the pixel space sweet_hid_touch wants (the HID
++ * layer adds the 1125x2436 canvas origin itself).
++ */
++static void
++a05s_touch_run(void)
++{
++	uint8_t buf[HX_REPORT_SZ];
++	unsigned errs = 0, bad = 0;
++
++	printf("A05S TOUCH: himax polling every 10 ms, 1080x2400\n");
++	for (;;) {
++		int x[TOUCH_MAX] = {0}, y[TOUCH_MAX] = {0};
++		uint32_t mask = 0;
++
++		if (rain_panel_off) {
++			touch_report(0, st.x, st.y);
++			touch_wait(50);
++			continue;
++		}
++		int e = himax_read(HX_EVENT_STACK, buf, sizeof(buf));
++		if (e) {
++			if (++errs == 10) {
++				touch_report(0, st.x, st.y);
++			}
++			touch_wait(10);
++			continue;
++		}
++		errs = 0;
++		unsigned sum = 0;
++		for (unsigned i = 0; i < sizeof(buf); i++) {
++			sum += buf[i];
++		}
++		if ((sum & 0xffu) != 0) {
++			if (++bad == 10) {
++				touch_report(0, st.x, st.y);
++				bad = 0;
++			}
++			touch_wait(10);
++			continue;
++		}
++		bad = 0;
++		unsigned n = buf[HX_REPORT_SZ - 4] & 0x0fu;
++		if (n > HX_MAX_PT) {
++			n = HX_MAX_PT;
++		}
++		for (unsigned i = 0; i < n; i++) {
++			unsigned px = ((unsigned)buf[i * 4] << 8) | buf[i * 4 + 1];
++			unsigned py = ((unsigned)buf[i * 4 + 2] << 8) | buf[i * 4 + 3];
++			if (px >= 1080u || py >= 2400u) {
++				continue;
++			}
++			x[i] = (int)px;
++			y[i] = (int)py;
++			mask |= 1u << i;
++		}
++		touch_report(mask, x, y);
++		touch_wait(10);
++	}
++}
++
+ static bool
+ rain_nvt_alive(void)
+ {
+@@ -1706,11 +1833,11 @@
+ 	touch_wr(rn.se, 0x24, 0x7f);
+ 	touch_wr(rn.se, 0x20, 1);
+ 	touch_wr(rn.se, SE_CLK_SEL, 0);
+-	touch_wr(rn.se, SE_MCLK, (16u << 4) | 1u);         /* 19.2 MHz / 16 = 1.2 MHz */
+-	touch_wr(rn.se, RAIN_SPI_CPHA, 0);                 /* SPI mode 0 */
++	touch_wr(rn.se, SE_MCLK, ((a05s_touch ? 2u : 16u) << 4) | 1u); /* 19.2 MHz / div */
++	touch_wr(rn.se, RAIN_SPI_CPHA, a05s_touch ? 1u : 0u); /* a05s: CPHA=1, rain: mode 0 */
+ 	touch_wr(rn.se, RAIN_SPI_CPOL, 0);
+ 	touch_wr(rn.se, RAIN_SPI_LOOPBACK, 0);
+-	touch_wr(rn.se, RAIN_SPI_DEMUXSEL, 0);             /* CS0 */
++	touch_wr(rn.se, RAIN_SPI_DEMUXSEL, a05s_touch ? 2u : 0u); /* a05s: CS2, rain: CS0 */
+ 	touch_wr(rn.se, RAIN_SPI_DEMUXINV, 0);
+ 	touch_wr(rn.se, RAIN_SPI_TRANSCFG, 0);             /* CS held for a command */
+ 	touch_wr(rn.se, RAIN_SPI_WORDLEN, 8u - 4u);        /* 8-bit words */
+@@ -1750,6 +1877,10 @@
+ 		(void)rain_spi(RAIN_OP_FULL, pat, rg.lb, sizeof(pat));
+ 		rg.loopback = false;
+ 	}
++	if (a05s_touch) {
++		a05s_touch_bringup();
++		return;
++	}
+ 	rn.stage = "nvt eng reset";
+ 	int e = rain_nvt_write(RAIN_NVT_ENGRST, 0x5a);
+ 	if (e) {
+@@ -2000,6 +2131,7 @@
+ 	(void)PE_parse_boot_argn("sweettouchirq", &st.irq_hint, sizeof(st.irq_hint));
+ 	(void)PE_parse_boot_argn("sweettouchdiag", &st.diag, sizeof(st.diag));
+ 	(void)PE_parse_boot_argn("raintouch", &rain_touch_on, sizeof(rain_touch_on));
++	(void)PE_parse_boot_argn("a05stouch", &a05s_touch, sizeof(a05s_touch));
+ 	if (!enabled && !rain_touch_on) {
+ 		printf("SWEET TOUCH: disabled (sweettouch=0)\n");
+ 		return;
