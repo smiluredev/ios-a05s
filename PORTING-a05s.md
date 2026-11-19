@@ -61,26 +61,23 @@ Boot image for the first userland boot:
 
 | 4 | 2026-11-18 | same boot, left running (~11 min) | **Milestone 2: iOS 16.5 lock screen on the A05s.** The first boot completed (data volume created); the lock screen is drawn on the 1080x2400 panel through the topaz display path. Touch is off (`sweettouch=0`, no Himax driver), GPU is off (no `gpu=1`/userland), so the UI is CPU-rendered and not interactive yet. |
 
+| 5 | 2026-11-18 | `a05s-touch1.img` = CI kernel with `0997` + `MODE=ios ... raintouch=1 a05stouch=1 sweetusb=3` | **Touch probe runs, but no touch.** Log: `A05S TOUCH: se0 fw=0x102 ifdis=0 hwtx=0x20102964 hwrx=0x20204800 gpi=0 cpha=0x1 demux=0x2 mclk=0x21`; `himax event-stack read e=0 00 00 00 00 00 00 00`. The A05s SE0 is in FIFO mode (`ifdis=0`), not GPI-DMA, and the rain `rain_spi` FIFO path wrote `SE_CMD` before the TX FIFO. `0998` preloads the FIFO and adds a 1 s poll heartbeat; pending rebuild/test. |
+
 ## Current state / next
 
 - `userdata` now holds the iOS 16.5 HFS+ root and the first boot completed.
   The root is 16 GiB inside a 116.6 GB partition; it needs `hfs-grow` (GPU
   userland) later to use the rest.
-- **Blocker (2026-11-18)**: the local touch commit is not pushed. This agent
-  host has no `gh` and no GitHub credential (`git push` asks for a username;
-  `~/.ssh/id_ed25519` is not authorized for the repo). Unblock with
-  `git push origin rain` from an authenticated shell, then run `xnu.yml` on
-  `rain` (GitHub UI "Run workflow" or `gh workflow run xnu.yml --ref rain`).
-- **Touch (Himax hx83112f), first attempt ready.** Patch
-  `xnu/patches/0997-a05s-himax-touch.patch` adds an A05s branch to the rain
-  `sweet_touch.c`. Boot with `raintouch=1 a05stouch=1`: it uses the rain
-  SE0/GPI-DMA transport with CS2, CPHA=1 and 9.6 MHz, pin-resets the IC on
-  GPIO 86, then polls the event stack (`0x30`) and parses the 56-byte
-  HX83112F report (10 fingers, x/y big-endian, checksum, finger count in the
-  last word). No firmware upload: the vendor driver keeps the FW in the IC's
-  own flash, so a pin reset should bring it back. Pending: CI kernel build and
-  the first boot with a `MODE=ios` image; the live log (`sweetusb=3`) will
-  show `A05S TOUCH:` lines.
+- **Touch (Himax hx83112f), test #1.** `0997` adds the A05s branch to the
+  rain `sweet_touch.c`: `raintouch=1 a05stouch=1`, SE0 CS2/CPHA=1/9.6 MHz,
+  reset GPIO 86, event stack `0x30`, 56-byte HX83112F report. The kernel
+  booted to the lock screen and the probe ran, but the event stack read was
+  all-zero. The log showed `gpi=0 ifdis=0`: the A05s SE0 is in **FIFO mode**,
+  and the rain `rain_spi` FIFO path wrote `SE_CMD` before the TX FIFO, so the
+  Himax never saw the `F3 30 00` read command. `0998-a05s-himax-fifo-fix.patch`
+  preloads the TX FIFO and prints a 1 s `poll n= sum=` heartbeat; rebuild and
+  boot with the same args. If the heartbeat stays zero, the next checks are
+  the CS2 pin/DEMUX, the GPIO 86 reset/power rail and the IC flash FW.
 - GPU (Adreno 610 / Mesa freedreno userland + A05s zap firmware) is the other
   big win: the CPU renderer is slow.
 - Live log: `build-a05s/a05s-A05S-dbg1.img` (`sweetusb=3 sweetfps=1`) is ready
@@ -105,10 +102,10 @@ Boot image for the first userland boot:
   and matches, but no DSC programming exists. The console (splash FB) works;
   the AppleCLCD/iOS scanout path is untested. `sweetfb_noshadow=1` is still used
   for the first boots.
-- **Touch**: draft in `0997-a05s-himax-touch.patch` (Himax event stack,
-  reset GPIO 86, CS2/CPHA=1). Not yet built or booted; the vendor FW in the
-  IC flash is assumed valid. If the event stack reads all-zero/0xFF, the next
-  step is the Himax flash download (vendor `hx83112f_TXD_FW.bin`).
+- **Touch**: `0997` (probe) + `0998` (FIFO TX preload + heartbeat) are in the
+  A05s series; the FIFO fix is not booted yet. If the event stack still reads
+  all-zero/0xFF, the next step is the Himax flash download (vendor
+  `hx83112f_TXD_FW.bin`) or checking that the IC's power rail is on.
 - **GPU** (Adreno 610), **audio** (APR/Elite on ADSP), **Wi-Fi** (WCN),
   **battery** (SM5602), **USB live log**: all rain code should mostly port, but
   none has been run on the A05s yet.

@@ -1,0 +1,42 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -1213,7 +1213,9 @@
+ 	touch_wr(se, SE_IRQ_CLR, 0xffffffffu);
+ 	touch_wr(se, SE_TX_LEN, n);         /* 8-bit words */
+ 	touch_wr(se, SE_RX_LEN, op == RAIN_OP_FULL ? n : 0);
+-	touch_wr(se, SE_CMD, op << 27);
++	/* Preload the TX FIFO before ringing the command: the SE starts clocking
++	 * as soon as SE_CMD is written, and the Himax read needs 0xF3/0x30 in the
++	 * very first bytes or the chip never sees the read command. */
+ 	for (unsigned i = 0; i < n; i += 4) {
+ 		uint32_t w = 0;
+ 		for (unsigned b = 0; b < 4 && i + b < n; b++) {
+@@ -1221,6 +1223,7 @@
+ 		}
+ 		touch_wr(se, SE_TX, w);
+ 	}
++	touch_wr(se, SE_CMD, op << 27);
+ 	unsigned got = 0;
+ 	for (unsigned spin = 0; spin < 200000; spin++) {
+ 		uint32_t irq = touch_rd(se, SE_IRQ);
+@@ -1583,7 +1586,7 @@
+ a05s_touch_run(void)
+ {
+ 	uint8_t buf[HX_REPORT_SZ];
+-	unsigned errs = 0, bad = 0;
++	unsigned errs = 0, bad = 0, tick = 0;
+ 
+ 	printf("A05S TOUCH: himax polling every 10 ms, 1080x2400\n");
+ 	for (;;) {
+@@ -1621,6 +1624,11 @@
+ 		if (n > HX_MAX_PT) {
+ 			n = HX_MAX_PT;
+ 		}
++		if (++tick % 100u == 0) {
++			printf("A05S TOUCH: poll %u n=%u sum=%#x xy=%02x%02x,%02x%02x state=%02x %02x %02x %02x\n",
++			    tick, n, sum, buf[0], buf[1], buf[2], buf[3],
++			    buf[52], buf[53], buf[54], buf[55]);
++		}
+ 		for (unsigned i = 0; i < n; i++) {
+ 			unsigned px = ((unsigned)buf[i * 4] << 8) | buf[i * 4 + 1];
+ 			unsigned py = ((unsigned)buf[i * 4 + 2] << 8) | buf[i * 4 + 3];
