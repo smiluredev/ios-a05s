@@ -30,8 +30,15 @@ trap - EXIT
 rmdir "$mnt"
 
 fsck_clean	# the tweak mount touched the volume again
-img2simg "$out" "$I/ios16-root.simg"
+# img2simg is optional (and absent here): flash the raw .img with -S 256M.
+if command -v img2simg >/dev/null 2>&1; then
+	img2simg "$out" "$I/ios16-root.simg"
+	chown "${SUDO_UID:-0}:${SUDO_GID:-0}" "$I/ios16-root.simg"
+	ls -la "$I/ios16-root.simg"
+else
+	echo "img2simg not installed: flash the raw .img (fastboot -S 256M)"
+fi
 sha256sum "$out" > "$I/ios16-root.img.sha256"
-chown "${SUDO_UID:-0}:${SUDO_GID:-0}" "$out" "$I/ios16-root.simg" "$I/ios16-root.img.sha256"
-ls -la "$out" "$I/ios16-root.simg"
+chown "${SUDO_UID:-0}:${SUDO_GID:-0}" "$out" "$I/ios16-root.img.sha256"
+ls -la "$out"
 echo "DONE: iOS root image built"
