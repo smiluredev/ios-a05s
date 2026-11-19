@@ -1,0 +1,86 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -2006,6 +2006,74 @@
+ 
+ static void a05s_touch_run(void);
+ 
++/* Raw GPIO bit-bang on the QUP0 SE0 pins: proves whether the chip answers at all. */
++static unsigned
++bb_xfer(unsigned clk, unsigned mosi, unsigned miso, unsigned cs,
++    const uint8_t *tx, unsigned nt, uint8_t *rx, unsigned nr)
++{
++	unsigned i, b, got = 0;
++
++	touch_gpio(cs, 0, 0, 3, true, true);
++	touch_gpio(clk, 0, 0, 3, true, false);
++	touch_gpio(mosi, 0, 0, 3, true, false);
++	touch_gpio(miso, 0, 3, 3, false, false);
++	touch_wait(1);
++	touch_gpio(cs, 0, 0, 3, true, false);
++	touch_wait(1);
++	for (i = 0; i < nt + nr; i++) {
++		uint8_t v = i < nt ? tx[i] : 0xffu;
++		uint8_t r = 0;
++		for (b = 0; b < 8u; b++) {
++			unsigned bit = (v >> (7u - b)) & 1u;
++			touch_gpio(clk, 0, 0, 3, true, false);
++			touch_gpio(mosi, 0, 0, 3, true, bit != 0);
++			touch_gpio(clk, 0, 0, 3, true, true);
++			r = (uint8_t)((r << 1) |
++			    (touch_rd(touch_tile(miso), TOUCH_GPIO_IO(miso)) & 1u));
++		}
++		if (i >= nt && got < nr) {
++			rx[got++] = r;
++		}
++	}
++	touch_gpio(cs, 0, 0, 3, true, true);
++	touch_gpio(clk, 0, 0, 3, true, false);
++	return got;
++}
++
++static void
++a05s_bitbang(void)
++{
++	static const uint8_t tx[3] = { 0xf3u, 0x30u, 0x00u };
++	uint8_t rx[8];
++	unsigned c, m, si, k;
++
++	for (c = 0; c < 4u; c++) {
++		for (m = 0; m < 4u; m++) {
++			for (si = 0; si < 4u; si++) {
++				if (c == m || c == si || m == si) {
++					continue;
++				}
++				for (k = 0; k < 4u; k++) {
++					if (k != c && k != m && k != si) {
++						break;
++					}
++				}
++				bzero(rx, sizeof(rx));
++				printf("A05S TOUCH: bb clk=%u mosi=%u miso=%u cs=%u\n",
++				    c, m, si, k);
++				(void)bb_xfer(c, m, si, k, tx, sizeof(tx), rx, sizeof(rx));
++				printf("A05S TOUCH: bb rx %02x %02x %02x %02x %02x %02x %02x %02x\n",
++				    rx[0], rx[1], rx[2], rx[3], rx[4], rx[5], rx[6], rx[7]);
++				touch_wait(100);
++			}
++		}
++	}
++	for (c = 0; c < 4u; c++) {
++		touch_gpio(c, 1, 0, 2, false, false);   /* back to qup0 */
++	}
++	touch_wait(50);
++}
++
+ /* Vendor HX_RST_PIN_FUNC: GPIO 86 is active low. */
+ static void
+ a05s_touch_bringup(void)
+@@ -2034,6 +2102,8 @@
+ 	touch_wait(10);
+ 	touch_gpio(HX_GPIO_RST, 0, 0, 2, true, true);
+ 	touch_wait(100);
++	a05s_bitbang();
++	touch_wait(100);
+ 	printf("A05S TOUCH: rst cfg=%#x io=%#x\n",
+ 	    touch_rd(st.west, TOUCH_GPIO_CFG(HX_GPIO_RST)),
+ 	    touch_rd(st.west, TOUCH_GPIO_IO(HX_GPIO_RST)));
