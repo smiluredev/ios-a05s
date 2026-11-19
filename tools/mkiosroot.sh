@@ -83,6 +83,9 @@ copy() {
 	rm -f "$log"
 	return $rc
 }
+copy "$work/os/root" "$work/root"
+copy "$work/sysos/root" "$work/root/private/preboot/Cryptexes/OS"
+
 # Cryptex1,AppOS is a separate (small) APFS cryptex on iOS 16.5 too.
 # Copy it when the image is APFS; otherwise it is already in the OS root.
 if file "$appos" | grep -q "APFS"; then
