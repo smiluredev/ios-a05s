@@ -1,0 +1,90 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -16,6 +16,10 @@
+ #include <kern/sched_prim.h>
+ #include <machine/machine_routines.h>
+ #include <pexpert/pexpert.h>
++#include <sys/vnode.h>
++#include <sys/vnode_if.h>
++#include <sys/vfs_context.h>
++#include <sys/uio.h>
+ #include <vm/vm_kern.h>
+ #include <vm/pmap.h>
+ #include <arm/caches_internal.h>
+@@ -1650,40 +1654,46 @@
+ static uint8_t hx_cfg[8192];
+ static uint32_t hx_fw_pa, hx_fw_off, hx_fw_sz, hx_cfg_pa, hx_cfg_sz;
+ 
+-/* The FW rides in the boot payload as /chosen/memory-map a05sfw = <pa, len>
+- * (tools/mkpayload.py --blob), so it never has to live in git or in the root. */
++/* The FW is read from the iOS root after it is mounted, so the boot payload
++ * never carries the 128 KB blob (the A05s hangs in the touch reset merely from
++ * having it in the payload, even when nothing reads it). */
++static uint8_t hx_fw_store[0x20000];
++
+ static int
+ himax_fw_map(void)
+ {
+-	DTEntry mm;
+-	void const *prop = NULL;
+-	unsigned int psize = 0;
+-	uint64_t pa, len;
+-	vm_offset_t va;
++	vnode_t vp = NULL;
++	uio_t uio;
++	int e;
+ 
+ 	if (hx_fw) {
+ 		return 0;
+ 	}
+-	if (SecureDTLookupEntry(NULL, "/chosen/memory-map", &mm) != kSuccess ||
+-	    SecureDTGetProperty(mm, "a05sfw", &prop, &psize) != kSuccess ||
+-	    psize < 16 || !prop) {
++	e = vnode_lookup("/private/var/fw/hx83112f.bin", 0, &vp, vfs_context_current());
++	if (e || !vp) {
++		printf("A05S TOUCH: fw file not found e=%d\n", e);
++		return -1;
++	}
++	uio = uio_create(1, 0, UIO_SYSSPACE, UIO_READ);
++	if (!uio) {
++		vnode_put(vp);
+ 		return -1;
+ 	}
+-	pa = ((const uint64_t *)prop)[0];
+-	len = ((const uint64_t *)prop)[1];
+-	if (len < 0x20000u || len > (16u << 20)) {
++	uio_addiov(uio, (user_addr_t)(uintptr_t)hx_fw_store, sizeof(hx_fw_store));
++	e = VNOP_READ(vp, uio, 0, vfs_context_current());
++	hx_fw_len = (unsigned)(sizeof(hx_fw_store) - uio_resid(uio));
++	uio_free(uio);
++	vnode_put(vp);
++	if (e) {
++		printf("A05S TOUCH: fw file read e=%d\n", e);
+ 		return -1;
+ 	}
+-	/* The shim's copy may still sit in the cache. */
+-	flush_dcache64((addr64_t)pa, (unsigned)len, TRUE);
+-	va = ml_io_map((vm_offset_t)pa, (vm_size_t)len);
+-	if (!va) {
++	if (hx_fw_len < HX_FW_TABLE + 16u * 2u) {
++		printf("A05S TOUCH: fw file short %u\n", hx_fw_len);
+ 		return -1;
+ 	}
+-	hx_fw = (const uint8_t *)va;
+-	hx_fw_len = (unsigned)len;
+-	printf("A05S TOUCH: fw blob pa=%#llx len=%u\n",
+-	    (unsigned long long)pa, hx_fw_len);
++	hx_fw = hx_fw_store;
++	printf("A05S TOUCH: fw file %u bytes\n", hx_fw_len);
+ 	return 0;
+ }
+ 
+@@ -1900,7 +1910,7 @@
+ 			printf("A05S TOUCH: fw table invalid\n");
+ 		}
+ 	} else {
+-		printf("A05S TOUCH: no a05sfw blob (rebuild with boot-probe --blob)\n");
++		printf("A05S TOUCH: no fw file (put it at /private/var/fw/hx83112f.bin)\n");
+ 	}
+ 	for (int t = 0; t < 10 && e; t++) {
+ 		e = himax_read(HX_EVENT_STACK, buf, sizeof(buf));

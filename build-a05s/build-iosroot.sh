@@ -25,6 +25,8 @@ mnt=$(mktemp -d)
 mount -t hfsplus -o loop,force "$out" "$mnt"
 trap 'umount "$mnt" 2>/dev/null || true; rmdir "$mnt"' EXIT
 python3 tools/sweet-root-tweaks.py "$mnt"
+# The HX83112F FW is read from the root by SweetTouch (1037), not from the boot payload.
+install -D -m 0644 -o 0 -g 0 research/fw-a05s/hx83112f_TXD_FW.bin "$mnt/private/var/fw/hx83112f.bin"
 umount "$mnt"
 trap - EXIT
 rmdir "$mnt"
