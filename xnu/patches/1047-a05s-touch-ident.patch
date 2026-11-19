@@ -1,9 +1,6 @@
 --- a/bsd/dev/sweet_touch.c
 +++ b/bsd/dev/sweet_touch.c
-@@ -2006,6 +2006,61 @@
- 
- static void a05s_touch_run(void);
- 
+@@ -2009,3 +2009,58 @@
 +/* One-boot identification: Himax, Ilitek or an I2C touch, and is MISO alive? */
 +extern int sweet_i2c_bus_read(int bus, uint8_t addr, uint8_t reg,
 +    uint8_t *buf, unsigned len);
@@ -70,16 +67,3 @@
  	if (himax_fw_map() == 0) {
  		if (himax_fw_prepare() == 0) {
  			(void)himax_download();
-@@ -2084,8 +2140,10 @@
- 		uint32_t mask = 0;
- 
- 		if (++tick % 100u == 0) {
--			printf("A05S TOUCH: poll %u last_e=%d last_sum=%#x last_n=%u errs=%u state=%02x %02x %02x %02x\n",
--			    tick, last_e, last_sum, last_n, errs, buf[52], buf[53], buf[54], buf[55]);
-+			printf("A05S TOUCH: poll %u last_e=%d last_sum=%#x last_n=%u errs=%u irq=%u state=%02x %02x %02x %02x\n",
-+			    tick, last_e, last_sum, last_n, errs,
-+			    touch_rd(st.west, TOUCH_GPIO_IO(TOUCH_PIN_IRQ)) & 1u,
-+			    buf[52], buf[53], buf[54], buf[55]);
- 		}
- 		if (rain_panel_off) {
- 			touch_report(0, st.x, st.y);
