@@ -57,11 +57,15 @@ Boot image for the first userland boot:
 `MODE=ios bash build-a05s/boot-probe.sh xnu-kernel.zip A05S-ios1`
 (17.7 MB, v4, cmdline has `cpus=4 ufsrw=1 rootrw=1 launchd_unsecure_cache=1`).
 
+| 3 | 2026-11-18 | `boot` = `MODE=ios` image (`cpus=4 ufsrw=1 rootrw=1 launchd_unsecure_cache=1`); `fastboot -S 256M flash userdata research/ipsw/ios16-root.img` (47/47 sparse chunks, 479.9 s; partition 116.6 GB), then `fastboot reboot` | **iOS userland starts.** The Apple logo is drawn on the 1080x2400 panel (display path works with the panel's DSC as left by ABL). First boot in progress; the lock screen is the next expected step. The fastboot "avb footer" warning is harmless (the client miscomputes the sparse image size; every write returned OKAY). |
+
 ## Current state / next
 
-- **Blocker:** `userdata` still holds Android. Next: flash the iOS root to
-  `userdata` (**destructive**, erases Android data) and boot the `MODE=ios`
-  image.
+- `userdata` now holds the iOS 16.5 HFS+ root. The root is 16 GiB inside a
+  116.6 GB partition; it needs `hfs-grow` (GPU userland) later to use the rest.
+- Next: wait for the first boot (data volume creation, ~5-15 min at 4 cores).
+  If it stalls on the Apple logo, debug with a `sweetusb=3` live-log kernel
+  and/or `sweetfb_noshadow=0` (flip buffers), then touch (Himax), GPU, audio.
 - The iOS root is built from `rootfs/` (IPSW members):
   `OS` = `096-04088-077` (UDIF/lzfse, opened directly by the local
   `apfs-fuse` fork), `Cryptex1,SystemOS` = `096-04666-078` (raw APFS),
