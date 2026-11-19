@@ -65,6 +65,7 @@ Boot image for the first userland boot:
 | 6 | 2026-11-19 | `a05s-touch2.img` = `0998` FIFO-preload draft | Boot hung in `rain_spi` after the `se0` print: GENI rejects TX written before `SE_CMD`. Preload reverted. |
 | 7 | 2026-11-19 | `a05s-touch3.img` = `0998` CPOL=4 | `cpha=0x1 cpol=0x4 demux=0x2 mclk=0x21`, event stack still zero and no heartbeat: a later `rain_spi` read spun for 200 s. `0999` cuts that spin to 5000 iterations and prints the heartbeat even on error. |
 | 8 | 2026-11-19 | `a05s-touch4.img` = `0999` diagnostics | **Transport proven, chip silent.** `pins=0x84 0x84 0x84 0x84` (all four SE0 pins muxed), internal FIFO loopback `e=0 11 22 33 44 55 66 77 88`, `se0 ... cpol=0x4`, but the event stack and every poll read `00`: MISO is not driven. Vendor `himax_common.h` defines **`HX_ZERO_FLASH`**, so the HX83112F has no boot flash: the vendor downloads the firmware on every boot (`himax_boot_upgrade` sets `g_boot_upgrade_flag = true`). A pin reset alone leaves the ROM bootloader, which does not serve the event stack. `research/fw-a05s/hx83112f_TXD_FW.bin` is the image to download. |
+| 9 | 2026-11-19 | `a05s-touch5.img` = `1031` AHB probe | Reset pin readback `rst cfg=0x280 io=0x3` (output, drive 2, high) and pins/loopback unchanged, so GPIO 86 is good. All AHB reads returned `00` on every CS, but **the probe was invalid**: `1031` encoded the AHB address big-endian while the vendor's `hx_parse_assign_cmd()` is **little-endian** (`cmd[0] = addr & 0xFF`). The event stack read is a single-byte command so it was valid; an idle event stack is zero, so it does not prove the FW is missing either. `1032` fixes the byte order and the printed FW-version value (LE). |
 
 ## Current state / next
 
@@ -95,13 +96,33 @@ Boot image for the first userland boot:
   answers on CS2 the transport/CS/reset are all good and only the download
   is missing; an all-`FF` answer means MISO floats (power/reset/CS) and an
   all-`00` answer means the chip is unpowered or held in reset.
-  After that, port `himax_zf_part_info()`: read `hx83112f_TXD_FW.bin` from
-  the iOS root (not from git), write `info[0]` (FW entity) and the merged
-  config with burst+AHB chunks, then `_reload_disable(0)`, `_power_on_init()`
-  (sense on, wait for `C072` reload-done) and re-read the event stack.
-  `_calc_crc_by_hw` can be skipped or implemented later; `_write_sram_0f`
-  chunks at `BUS_W_DLEN - 4`, but the FIFO path must chunk at <= 60 data
-  bytes per `rain_spi` call.
+  **Correction (touch5):** `1031` sent AHB addresses big-endian; the vendor
+  helper is little-endian, so every AHB read above was from a wrong register
+  and proves nothing. `1032-a05s-himax-ahb-little-endian.patch` fixes the
+  address/data encoding and the LE value print. Boot `1032` next: a non-zero
+  `fw-ver` on CS2 means the FW *is* running (the zero event stack was just
+  "no finger") and the bug is in the report path; `0`/`FFFFFFFF` means the
+  bootloader, and then the zero-flash download below is required.
+- **Zero-flash download layout (from the file, not yet ported).**
+  `research/fw-a05s/hx83112f_TXD_FW.bin` (131072 B): the partition table is at
+  **0x10400** (the driver's map moves `CFG_TABLE_FLASH_ADDR` there; the compiled
+  default 0x10000 is zero), `pnum=10`, no overlays. Partition 0: SRAM
+  **0x20000000**, size **65536**, file offset **0x400** (FW entity). Partitions
+  1..9 are config blobs at `0x10006a00..0x10007b00` (sizes 16..1536) from file
+  offsets `0x12400..0x14400`; merge them into a zero-filled buffer from the
+  lowest SRAM address to the highest end, 16-byte aligned. Sequence: AHB write
+  `0x55 -> 0x90000018` (system reset), sense-off (`[F2,31,27,95]`, wait 20 ms,
+  `[F2,31,00]`, wait 10 ms), then burst-on
+  (`[F2,13,31]`, `[F2,0D,11]`), write the FW entity and the merged config in
+  <=60-byte AHB chunks (address = base + offset, LE), then reload
+  `0xEC -> 0x90000048` and `_power_on_init()` (rawout/sorting/set-frame,
+  sense-on, wait for the `C072` reload-done word). `_calc_crc_by_hw` can be
+  skipped at first.
+  The FW cannot go into git (vendor/device dump). Preferred transport: put it
+  in the iOS root image (e.g. `/System/Library/himax/`) at build time and read
+  it in the touch thread with `vnode_open`/`vn_rdwr` after the root mounts.
+  Alternative: extend `tools/mkpayload.py` with a reserved FW segment and pass
+  its physical address in a boot-arg.
 - GPU (Adreno 610 / Mesa freedreno userland + A05s zap firmware) is the other
   big win: the CPU renderer is slow.
 - Live log: `build-a05s/a05s-A05S-dbg1.img` (`sweetusb=3 sweetfps=1`) is ready
@@ -126,10 +147,11 @@ Boot image for the first userland boot:
   and matches, but no DSC programming exists. The console (splash FB) works;
   the AppleCLCD/iOS scanout path is untested. `sweetfb_noshadow=1` is still used
   for the first boots.
-- **Touch**: `0997` + `0998` + `0999` are proven on hardware; `1031` is the
-  next probe. The real fix is the zero-flash FW download described above.
-  Do **not** commit `research/fw-a05s/hx83112f_TXD_FW.bin`; install it into
-  the iOS root image at build time and read it from the mounted root.
+- **Touch**: `0997` + `0998` + `0999` are proven on hardware; `1031` ran but
+  its AHB addresses were byte-swapped; `1032` corrects that and is the next
+  boot. If the FW is not running, port the zero-flash download described
+  above. Do **not** commit `research/fw-a05s/hx83112f_TXD_FW.bin`; install it
+  into the iOS root image at build time and read it from the mounted root.
 - **GPU** (Adreno 610), **audio** (APR/Elite on ADSP), **Wi-Fi** (WCN),
   **battery** (SM5602), **USB live log**: all rain code should mostly port, but
   none has been run on the A05s yet.

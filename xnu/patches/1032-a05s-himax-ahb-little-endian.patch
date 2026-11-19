@@ -1,0 +1,73 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -1555,16 +1555,17 @@
+ #define HX_RESET_EVENT   0x900000e4u
+ #define HX_LEAVE_SAFE    0x90000098u
+ 
++/* hx_parse_assign_cmd() stores 32-bit values little endian, not big endian. */
+ static void
+-hx_put_be32(uint8_t *p, uint32_t v)
++hx_put_le32(uint8_t *p, uint32_t v)
+ {
+-	p[0] = (uint8_t)(v >> 24);
+-	p[1] = (uint8_t)(v >> 16);
+-	p[2] = (uint8_t)(v >> 8);
+-	p[3] = (uint8_t)v;
++	p[0] = (uint8_t)v;
++	p[1] = (uint8_t)(v >> 8);
++	p[2] = (uint8_t)(v >> 16);
++	p[3] = (uint8_t)(v >> 24);
+ }
+ 
+-/* Vendor himax_bus_write(): [F2, cmd, addr(4B big endian)?, data], TX only. */
++/* Vendor himax_bus_write(): [F2, cmd, addr(4B little endian)?, data], TX only. */
+ static int
+ himax_write_raw(uint8_t cmd, const uint8_t *addr4, const uint8_t *data, unsigned len)
+ {
+@@ -1606,8 +1607,8 @@
+ 	uint8_t a[4], d[4];
+ 
+ 	himax_burst(0);
+-	hx_put_be32(a, addr);
+-	hx_put_be32(d, val);
++	hx_put_le32(a, addr);
++	hx_put_le32(d, val);
+ 	return himax_write_raw(HX_AHB_ADDR_CMD, a, d, 4);
+ }
+ 
+@@ -1622,7 +1623,7 @@
+ 		return -1;
+ 	}
+ 	himax_burst(0);
+-	hx_put_be32(a, addr);
++	hx_put_le32(a, addr);
+ 	e = himax_write_raw(HX_AHB_ADDR_CMD, a, NULL, 0);
+ 	if (e) {
+ 		return e;
+@@ -1672,7 +1673,7 @@
+ 
+ 		bzero(v, sizeof(v));
+ 		r = himax_ahb_read(HX_FW_VER, v, 4);
+-		w = ((unsigned)v[0] << 24) | ((unsigned)v[1] << 16) | ((unsigned)v[2] << 8) | v[3];
++		w = ((unsigned)v[3] << 24) | ((unsigned)v[2] << 16) | ((unsigned)v[1] << 8) | v[0];
+ 		printf("A05S TOUCH: ahb fw-ver e=%d %02x %02x %02x %02x (%#x)\n",
+ 		    (int)r, v[0], v[1], v[2], v[3], w);
+ 		bzero(v, sizeof(v));
+@@ -1692,7 +1693,7 @@
+ 			touch_wait(1);
+ 			bzero(v, sizeof(v));
+ 			r = himax_ahb_read(HX_FW_VER, v, 4);
+-			w = ((unsigned)v[0] << 24) | ((unsigned)v[1] << 16) | ((unsigned)v[2] << 8) | v[3];
++			w = ((unsigned)v[3] << 24) | ((unsigned)v[2] << 16) | ((unsigned)v[1] << 8) | v[0];
+ 			printf("A05S TOUCH: cs%u fw-ver e=%d %02x %02x %02x %02x (%#x)\n",
+ 			    cs, (int)r, v[0], v[1], v[2], v[3], w);
+ 		}
+@@ -1701,7 +1702,7 @@
+ 		touch_wait(50);
+ 		bzero(v, sizeof(v));
+ 		r = himax_ahb_read(HX_FW_VER, v, 4);
+-		w = ((unsigned)v[0] << 24) | ((unsigned)v[1] << 16) | ((unsigned)v[2] << 8) | v[3];
++		w = ((unsigned)v[3] << 24) | ((unsigned)v[2] << 16) | ((unsigned)v[1] << 8) | v[0];
+ 		printf("A05S TOUCH: leave-safe e=%d fw-ver %02x %02x %02x %02x (%#x)\n",
+ 		    (int)r, v[0], v[1], v[2], v[3], w);
+ 	}
