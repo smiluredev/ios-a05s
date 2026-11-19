@@ -30,7 +30,10 @@ screen (image versions v8-v14 in NOTES.md):
 """
 import glob, os, plistlib, shutil, sys
 
-BUILD, VERSION = '20H392', '16.7.16'
+# Fallbacks only: main() reads the real values from the image's
+# System/Library/CoreServices/SystemVersion.plist (e.g. 20F66 / 16.5 for the
+# A05s root), so the migration/activation state matches the userland.
+BUILD, VERSION = '20F66', '16.5'
 MOBILE = 501
 
 
@@ -154,7 +157,9 @@ def audio(root):
         print('StartRecorderServer off', os.path.relpath(conf, root))
 
 
-ZONE = 'Europe/Berlin'      # rain: the owner's zone; Settings > Date & Time crashes, so it cannot be picked there
+# Set the owner's zone because Settings > Date & Time is unreliable; override
+# with SWEET_TZ=Europe/Berlin etc. (rain used Europe/Berlin).
+ZONE = os.environ.get('SWEET_TZ', 'America/Sao_Paulo')
 
 
 def inside(root, path, depth=0):
@@ -185,10 +190,22 @@ def timezone(root):
     os.symlink(target, link)
     print(f'timezone: localtime {old} -> {target}')
 
+def system_version(root):
+    """ProductBuildVersion / ProductVersion of the iOS root being tweaked."""
+    try:
+        d = load(os.path.join(root, 'System/Library/CoreServices/SystemVersion.plist'))
+        return d.get('ProductBuildVersion', BUILD), d.get('ProductVersion', VERSION)
+    except Exception:
+        return BUILD, VERSION
+
+
 def main():
+    global BUILD, VERSION
     if len(sys.argv) != 2 or not os.path.isdir(os.path.join(sys.argv[1], 'System/Library/xpc')):
         sys.exit(__doc__)
     root = sys.argv[1]
+    BUILD, VERSION = system_version(root)
+    print(f'root: iOS {VERSION} ({BUILD})')
     launchd(root)
     containers(root)
     activation(root)

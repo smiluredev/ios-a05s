@@ -1,5 +1,10 @@
 # iOS 16 on the Redmi 10C (`rain`)
 
+> **Fork note:** this checkout is the **Samsung Galaxy A05s** port (`smiluredev/ios-a05s`).
+> The A05s work, hardware differences, boot log and next steps are in
+> [PORTING-a05s.md](PORTING-a05s.md). The text below documents the upstream
+> Redmi 10C port that this fork builds on.
+
 **Apple's XNU kernel and the iOS 16.7.16 userland of the iPhone X, booting on a Xiaomi Redmi 10C**
 (`rain`, Xiaomi ROM family `fog`; Qualcomm **SM6225 "khaje"** / Snapdragon 680, 720×1650 panel, 4 GB RAM).
 

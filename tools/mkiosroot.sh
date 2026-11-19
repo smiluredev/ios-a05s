@@ -45,11 +45,14 @@ trap cleanup EXIT
 # apfs-fuse splits its options on ',' (e.g. in iPhone10,3 paths): use links.
 # Keep the .dmg name: apfs-fuse only parses UDIF images (the OS one is UDIF,
 # the cryptexes are raw APFS) when the file name ends in .dmg.
+APFS_FUSE=${APFS_FUSE:-$(command -v apfs-fuse || true)}
+[[ -x $APFS_FUSE ]] || { echo "apfs-fuse not found (set APFS_FUSE=/path/to/apfs-fuse)" >&2; exit 1; }
+
 apfs_mount() {
 	ln -s "$1" "$work/$2.dmg"
 	mkdir "$work/$2"
-	# As root: a user's FUSE mount is unreadable to the root rsync below.
-	sudo "$(command -v apfs-fuse)" "$work/$2.dmg" "$work/$2"
+	# As root: a user's FUSE mount is unreadable to the root rsync below
+	sudo "$APFS_FUSE" -l "$work/$2.dmg" "$work/$2"
 	mounts+=("$work/$2")
 }
 apfs_mount "$os" os
@@ -80,9 +83,13 @@ copy() {
 	rm -f "$log"
 	return $rc
 }
-copy "$work/os/root" "$work/root"
-copy "$work/sysos/root" "$work/root/private/preboot/Cryptexes/OS"
-copy "$work/appos/root" "$work/root/private/preboot/Cryptexes/App"
+# Cryptex1,AppOS is a separate (small) APFS cryptex on iOS 16.5 too.
+# Copy it when the image is APFS; otherwise it is already in the OS root.
+if file "$appos" | grep -q "APFS"; then
+	copy "$work/appos/root" "$work/root/private/preboot/Cryptexes/App"
+else
+	echo "App cryptex is not APFS; skipping (apps are in the OS root)"
+fi
 
 # Shared cache where dyld looks at ignition level 1: hard links, no extra space.
 dsc=private/preboot/Cryptexes/OS/System/Library/Caches/com.apple.dyld
