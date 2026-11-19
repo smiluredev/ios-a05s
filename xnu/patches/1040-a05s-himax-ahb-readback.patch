@@ -1,0 +1,37 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -1831,10 +1831,34 @@
+ 		touch_wait(20);
+ 	}
+ 	printf("A05S TOUCH: safe-mode done i=%u\n", i);
++	{
++		uint8_t r[16];
++		bzero(r, sizeof(r));
++		(void)himax_ahb_read(HX_CTRL_FW, r, 4);
++		printf("A05S TOUCH: ctrl_fw %02x %02x %02x %02x\n", r[0], r[1], r[2], r[3]);
++		bzero(r, sizeof(r));
++		(void)himax_ahb_read(0x900000f8u, r, 4);
++		printf("A05S TOUCH: fw-state %02x %02x %02x %02x\n", r[0], r[1], r[2], r[3]);
++	}
+ 
+ 	himax_burst(1);
+ 	e = himax_write_sram(hx_fw_pa, hx_fw + hx_fw_off, hx_fw_sz);
+ 	printf("A05S TOUCH: fw entity e=%d\n", e);
++	{
++		uint8_t r[16];
++		unsigned k;
++		bzero(r, sizeof(r));
++		(void)himax_ahb_read(hx_fw_pa, r, sizeof(r));
++		printf("A05S TOUCH: sram read");
++		for (k = 0; k < sizeof(r); k++) {
++			printf(" %02x", r[k]);
++		}
++		printf(" (want");
++		for (k = 0; k < sizeof(r); k++) {
++			printf(" %02x", hx_fw[hx_fw_off + k]);
++		}
++		printf(")\n");
++	}
+ 	if (!e) {
+ 		e = himax_write_sram(hx_cfg_pa, hx_cfg, hx_cfg_sz);
+ 	}
