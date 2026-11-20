@@ -1,0 +1,64 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -26,6 +26,15 @@
+ #include <pexpert/device_tree.h>
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++
++/*
++ * 1058: every printf() from this thread (after the sweettouchdelay wake)
++ * stops the console for the whole kernel and the SoC resets a few seconds
++ * later. The persistent log (sweet_log_mark, which does not touch the
++ * console) is the safe sink, so silence the console here: the breadcrumbs
++ * say which step ran.
++ */
++#define printf(...) do { } while (0)
+ /* Mach MIG declaration is not included by BSD's exported thread.h. */
+ extern kern_return_t thread_terminate(thread_t);
+ extern int sweet_rpmh_vreg_enable(const char *res, unsigned mv);
+@@ -2221,12 +2230,11 @@
+ 	printf("A05S TOUCH: se0 fw=%#x ifdis=%#x hwtx=%#x hwrx=%#x gpi=%d cpha=%#x cpol=%#x demux=%#x mclk=%#x\n",
+ 	    rn.fw, rn.ifdis, rn.hwtx, rn.hwrx, rg.mem != 0, rn.c_cpha, rn.c_cpol, rn.c_demux, rn.c_mclk);
+ 	touch_sync();
+-	touch_mark("MARK charger\n");
+-	printf("A05S TOUCH: charger enable\n");
+-	touch_sync();
+-	(void)sweet_a05s_charger_enable();
+-	printf("A05S TOUCH: charger enable done\n");
+-	touch_sync();
++	/*
++	 * 1058: sweet_a05s_charger_enable() lives in sweet_i2c1.c and prints;
++	 * a print from this thread stops the console, so it stays out of this
++	 * run (the phone charges on its own for now).
++	 */
+ 	touch_mark("MARK fw map\n");
+ 	printf("A05S TOUCH: fw map\n");
+ 	touch_sync();
+@@ -2265,6 +2273,7 @@
+ static void
+ a05s_touch_run(void)
+ {
++	touch_mark("MARK run loop\n");
+ 	uint8_t buf[HX_REPORT_SZ];
+ 	unsigned errs = 0, bad = 0, tick = 0;
+ 	int last_e = 0;
+@@ -2277,6 +2286,9 @@
+ 		int x[TOUCH_MAX] = {0}, y[TOUCH_MAX] = {0};
+ 		uint32_t mask = 0;
+ 
++		if (tick != 0u && tick % 3000u == 0u) {
++			touch_mark("MARK alive\n");
++		}
+ 		if (++tick % 100u == 0) {
+ 			printf("A05S TOUCH: poll %u last_e=%d last_sum=%#x last_n=%u errs=%u state=%02x %02x %02x %02x\n",
+ 			    tick, last_e, last_sum, last_n, errs, buf[52], buf[53], buf[54], buf[55]);
+@@ -2285,7 +2297,9 @@
+ 			}
+ 		}
+ 		if (tick == 1u) {
++			touch_mark("MARK ident\n");
+ 			a05s_ident();
++			touch_mark("MARK ident done\n");
+ 		}
+ 		if (tick % 10u == 0u) {
+ 			printf("A05S ID: tick=%u irq=%u\n", tick,
