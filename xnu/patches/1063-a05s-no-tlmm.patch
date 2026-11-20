@@ -1,0 +1,53 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -2217,16 +2217,16 @@
+ 	/* TDDI: GPIO86 is the shared panel+touch reset. Pulsing it low once the
+ 	 * DSI panel is up kills the display and the watchdog resets the SoC
+ 	 * (1051 boot loop). Only make sure the line is released. */
+-	touch_mark("MARK reset release\n");
+-	printf("A05S TOUCH: reset release\n");
+-	touch_sync();
+-	touch_gpio(HX_GPIO_RST, 0, 0, 2, true, true);
+-	touch_wait(100);
+-	touch_mark("MARK rst cfg\n");
+-	printf("A05S TOUCH: rst cfg=%#x io=%#x\n",
+-	    touch_rd(st.west, TOUCH_GPIO_CFG(HX_GPIO_RST)),
+-	    touch_rd(st.west, TOUCH_GPIO_IO(HX_GPIO_RST)));
+-	touch_sync();
++	/*
++	 * 1063: no TLMM access at all. `touch_gpio()` uses TOUCH_GPIO_CFG(n) =
++	 * n*0x1000, which lands one block early on khaje (the block header at
++	 * 0x400000 is not readable, and pin 86's real block is 0x457000), and
++	 * with the wrong block the board resets. The bootloader already leaves
++	 * the TDDI out of reset and the panel running, and row 46 showed that
++	 * pulsing this pin takes the display (and the SoC) down, so the a05s
++	 * path simply does not touch it.
++	 */
++	touch_mark("MARK reset skipped\n");
+ 	printf("A05S TOUCH: se0 fw=%#x ifdis=%#x hwtx=%#x hwrx=%#x gpi=%d cpha=%#x cpol=%#x demux=%#x mclk=%#x\n",
+ 	    rn.fw, rn.ifdis, rn.hwtx, rn.hwrx, rg.mem != 0, rn.c_cpha, rn.c_cpol, rn.c_demux, rn.c_mclk);
+ 	touch_sync();
+@@ -2243,7 +2243,9 @@
+ 		printf("A05S TOUCH: fw prepare\n");
+ 		touch_sync();
+ 		if (himax_fw_prepare() == 0) {
++			touch_mark("MARK fw download\n");
+ 			(void)himax_download();
++			touch_mark("MARK fw downloaded\n");
+ 		} else {
+ 			printf("A05S TOUCH: fw table invalid\n");
+ 		}
+@@ -2296,11 +2298,8 @@
+ 				(void)sweet_a05s_charger_kick();
+ 			}
+ 		}
+-		if (tick == 1u) {
+-			touch_mark("MARK ident\n");
+-			a05s_ident();
+-			touch_mark("MARK ident done\n");
+-		}
++		/* 1063: a05s_ident() bit-bangs GPIO0..3 through the TLMM (wrong
++		 * block on khaje, resets the board); it was a diagnostic only. */
+ 		if (tick % 10u == 0u) {
+ 			printf("A05S ID: tick=%u irq=%u\n", tick,
+ 			    touch_rd(st.west, TOUCH_GPIO_IO(TOUCH_PIN_IRQ)) & 1u);
