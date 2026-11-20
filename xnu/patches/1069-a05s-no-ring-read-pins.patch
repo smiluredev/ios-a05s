@@ -1,0 +1,59 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -48,7 +48,14 @@
+ static void
+ touch_sync(void)
+ {
+-	sweet_log_sync();
++	/*
++	 * 1069: the persistent-log path is off for this driver. Every flush
++	 * takes the UFS controller lock and issues a raw write; when that write
++	 * is slow the log thread blocks with the lock held and the root
++	 * filesystem (which is the same UFS driver) wedges — bw68/bw69 showed
++	 * SLOG stopping at 12 and the whole system freezing. The console prints
++	 * are live, so nothing is lost.
++	 */
+ }
+ 
+ /*
+@@ -60,7 +67,7 @@
+ static void
+ touch_mark(const char *s)
+ {
+-	sweet_log_mark(s);
++	(void)s;        /* see touch_sync(): no ring writes from here */
+ }
+ 
+ #define TOUCH_SE_PA      0x04a88000u /* QUP0 SE2 */
+@@ -2634,19 +2641,26 @@
+ 		 * +0x1000 variant follows. 0x56000/0x57000 are GPIO86 either way.
+ 		 */
+ 		static const uint32_t cand[] = {
+-			0x00000u, 0x01000u, 0x02000u, 0x03000u,
++			0x01000u, 0x02000u, 0x03000u, 0x04000u,
+ 			0x56000u, 0x57000u,
+ 		};
+ 		{
+ 			unsigned i;
++			/*
++			 * 1069: 0x0 (= 0x400000, the block header under the
++			 * n*0x1000 layout) is gone: reading it killed the board
++			 * in bw62/bw63. Now every candidate is printed *before*
++			 * the read, so a hang names the address.
++			 */
+ 			for (i = 0; i < sizeof(cand) / sizeof(cand[0]); i++) {
++				printf("A05S TOUCH: rd %#x ...\n", cand[i]);
+ 				printf("A05S TOUCH: rd %#x = %#x\n", cand[i],
+ 				    touch_rd(west, cand[i]));
+ 			}
+-			rn.pin_after[0] = touch_rd(west, 0x00000u);
+-			rn.pin_after[1] = touch_rd(west, 0x01000u);
+-			rn.pin_after[2] = touch_rd(west, 0x02000u);
+-			rn.pin_after[3] = touch_rd(west, 0x03000u);
++			rn.pin_after[0] = touch_rd(west, 0x01000u);
++			rn.pin_after[1] = touch_rd(west, 0x02000u);
++			rn.pin_after[2] = touch_rd(west, 0x03000u);
++			rn.pin_after[3] = touch_rd(west, 0x04000u);
+ 		}
+ 		printf("A05S TOUCH: pins done\n");
+ 	} else {
