@@ -1,0 +1,65 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -73,8 +73,6 @@
+ #define TOUCH_PIN_RESET  86u
+ #define TOUCH_PIN_IRQ    80u
+ #define TOUCH_PIN_AVDD   36u
+-#define TOUCH_GPIO_CFG(n) ((uint32_t)(n) * 0x1000u)
+-#define TOUCH_GPIO_IO(n)  (TOUCH_GPIO_CFG(n) + 4u)
+ #define TOUCH_MAX        10u
+ #define TOUCH_GOODIX     1
+ #define TOUCH_FTS        2
+@@ -139,6 +137,20 @@
+ static int rain_touch_on;      /* boot-arg raintouch=1: Novatek SPI probe (rain) */
+ static int a05s_touch;         /* boot-arg a05stouch=1: Himax HX83112F on QUP0 SE0 CS2 */
+ 
++/*
++ * 1066: khaje has a single TLMM at 0x00400000 and its per-pin blocks start at
++ * 0x00401000, i.e. offset 0x1000*(pin+1); the block header at 0x400000 is not
++ * readable and an access to it hangs the bus (that is what killed bw62/63).
++ * rain/topaz keep the old 0x1000*pin layout inside their WEST/EAST tiles.
++ */
++static inline uint32_t
++touch_gpio_off(unsigned pin)
++{
++	return (uint32_t)((a05s_touch ? pin + 1u : pin) * 0x1000u);
++}
++#define TOUCH_GPIO_CFG(n) touch_gpio_off(n)
++#define TOUCH_GPIO_IO(n)  (touch_gpio_off(n) + 4u)
++
+ static uint32_t
+ touch_rd(vm_offset_t base, uint32_t off)
+ {
+@@ -2601,18 +2613,25 @@
+ 	rn.stage = "pins";
+ 	if (a05s_touch) {
+ 		/*
+-		 * The bootloader already muxed GPIO0..3 to qup0, so nothing here
+-		 * needs to touch the TLMM. 1062 skips the observation reads: with
+-		 * a single TLMM at 0x400000 the first read lands on the block
+-		 * header (0x400000) and that read never returns, which is where
+-		 * the bw62/bw63 boots stopped.
++		 * 1066: read-only observation with the corrected offsets
++		 * (0x1000*(pin+1)). GPIO0..3 are the QUP0 SPI pins, GPIO86 the
++		 * TDDI reset the bootloader already released, GPIO80 the IRQ.
++		 * Nothing is written here: the reset line is shared with the
++		 * panel and pulsing it takes the display down.
+ 		 */
++		touch_mark("MARK pins read\n");
+ 		for (unsigned p = 0; p < 4; p++) {
+-			rn.pin_after[p] = 0;
++			rn.pin_after[p] = touch_rd(west, TOUCH_GPIO_CFG(p));
+ 		}
+-			touch_mark("MARK pins skipped\n");
+ 		printf("A05S TOUCH: pins %#x %#x %#x %#x\n",
+ 			rn.pin_after[0], rn.pin_after[1], rn.pin_after[2], rn.pin_after[3]);
++		printf("A05S TOUCH: rst86 cfg=%#x io=%#x irq80 cfg=%#x io=%#x\n",
++		    touch_rd(west, TOUCH_GPIO_CFG(HX_GPIO_RST)),
++		    touch_rd(west, TOUCH_GPIO_IO(HX_GPIO_RST)),
++		    touch_rd(west, TOUCH_GPIO_CFG(TOUCH_PIN_IRQ)),
++		    touch_rd(west, TOUCH_GPIO_IO(TOUCH_PIN_IRQ)));
++		touch_mark("MARK pins read done\n");
++		printf("A05S TOUCH: pins done\n");
+ 	} else {
+ 	rn.stage = "pins";
+ 	for (unsigned p = 0; p < 4; p++) {
