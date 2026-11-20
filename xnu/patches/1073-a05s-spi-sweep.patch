@@ -1,0 +1,30 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -2231,8 +2231,9 @@
+ 		}
+ 	}
+ 	touch_wr(rn.se, RAIN_SPI_DEMUXSEL, 2u);
++	/* 1073: restore SPI mode 1 (the DT only has spi-cpha), not mode 3. */
+ 	touch_wr(rn.se, RAIN_SPI_CPHA, 1u);
+-	touch_wr(rn.se, RAIN_SPI_CPOL, 4u);
++	touch_wr(rn.se, RAIN_SPI_CPOL, 0u);
+ }
+ /* Vendor HX_RST_PIN_FUNC: GPIO 86 is active low. */
+ static void
+@@ -2296,6 +2297,16 @@
+ 			    cfg0, touch_rd(tl, c), io0, touch_rd(tl, o));
+ 		}
+ 	}
++	/*
++	 * 1073: with the reset released and the QUP0 pads actually muxed, the
++	 * chip should answer; if it does not, the bus parameters are wrong. The
++	 * old sweep (rows 30-34) ran while the pads were still in GPIO mode, so
++	 * it proved nothing. Try CS 0/2 x CPHA 0/1 x CPOL 0/1 with the Himax
++	 * 0xF3 read of the event stack and the Ilitek probes, then restore mode
++	 * 1 / CS2.
++	 */
++	printf("A05S TOUCH: spi sweep (pads muxed, reset released)\n");
++	a05s_ident();
+ 	printf("A05S TOUCH: se0 fw=%#x ifdis=%#x hwtx=%#x hwrx=%#x gpi=%d cpha=%#x cpol=%#x demux=%#x mclk=%#x\n",
+ 	    rn.fw, rn.ifdis, rn.hwtx, rn.hwrx, rg.mem != 0, rn.c_cpha, rn.c_cpol, rn.c_demux, rn.c_mclk);
+ 	touch_sync();
