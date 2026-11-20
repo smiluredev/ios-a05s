@@ -1,0 +1,117 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -146,15 +146,26 @@
+ static int a05s_touch;         /* boot-arg a05stouch=1: Himax HX83112F on QUP0 SE0 CS2 */
+ 
+ /*
+- * 1066: khaje has a single TLMM at 0x00400000 and its per-pin blocks start at
+- * 0x00401000, i.e. offset 0x1000*(pin+1); the block header at 0x400000 is not
+- * readable and an access to it hangs the bus (that is what killed bw62/63).
+- * rain/topaz keep the old 0x1000*pin layout inside their WEST/EAST tiles.
++ * 1071: khaje's TLMM is tile based, exactly like bengal
++ * (pinctrl-khaje.c: NORTH 0x0, WEST 0x100000, SOUTH 0x500000, EAST 0x900000,
++ * REG_SIZE 0x1000, ctl_reg = tile + REG_SIZE*pin). Pin 0..3, 80 and 86 are
++ * WEST, pin 36 is EAST. The n*0x1000 and (n+1)*0x1000 attempts of 1052..1070
++ * were therefore reading the NORTH tile, which khaje does not populate: an
++ * access there never retires, so the NoC stalls, the console dies and the SoC
++ * resets — that is every "TLMM hang" so far. Nothing was wrong with the pads.
+  */
++#define TOUCH_TILE_WEST  0x100000u
++#define TOUCH_TILE_EAST  0x900000u
++#define TOUCH_TLMM_MAP   0xD00000u      /* NORTH..EAST with the 0x400000 base */
++
+ static inline uint32_t
+ touch_gpio_off(unsigned pin)
+ {
+-	return (uint32_t)((a05s_touch ? pin + 1u : pin) * 0x1000u);
++	if (a05s_touch) {
++		return (pin == 36u ? TOUCH_TILE_EAST : TOUCH_TILE_WEST) +
++		    (uint32_t)pin * 0x1000u;
++	}
++	return (uint32_t)pin * 0x1000u;
+ }
+ #define TOUCH_GPIO_CFG(n) touch_gpio_off(n)
+ #define TOUCH_GPIO_IO(n)  (touch_gpio_off(n) + 4u)
+@@ -2257,15 +2268,26 @@
+ 	 * DSI panel is up kills the display and the watchdog resets the SoC
+ 	 * (1051 boot loop). Only make sure the line is released. */
+ 	/*
+-	 * 1063: no TLMM access at all. `touch_gpio()` uses TOUCH_GPIO_CFG(n) =
+-	 * n*0x1000, which lands one block early on khaje (the block header at
+-	 * 0x400000 is not readable, and pin 86's real block is 0x457000), and
+-	 * with the wrong block the board resets. The bootloader already leaves
+-	 * the TDDI out of reset and the panel running, and row 46 showed that
+-	 * pulsing this pin takes the display (and the SoC) down, so the a05s
+-	 * path simply does not touch it.
++	 * 1071: release the TDDI reset for real. GPIO86 is WEST + 86*0x1000 =
++	 * 0x400000+0x156000 = 0x556000, not 0x456000/0x457000. The line is
++	 * active low and sits at "in low pull-down" when nothing drives it (row
++	 * 44), which is exactly why the HX83112F never answered on SPI. Set the
++	 * output latch high *first*, then switch the pad to GPIO output, so the
++	 * line never glitches low (a low pulse takes the DSI panel with it).
+ 	 */
+-	touch_mark("MARK reset skipped\n");
++	{
++		uint32_t o = TOUCH_GPIO_IO(HX_GPIO_RST);
++		uint32_t c = TOUCH_GPIO_CFG(HX_GPIO_RST);
++		uint32_t io0 = touch_rd(west, o);
++		uint32_t cfg0 = touch_rd(west, c);
++		printf("A05S TOUCH: rst86 before cfg=%#x io=%#x\n", cfg0, io0);
++		touch_wr(west, o, io0 | (1u << 1));
++		uint32_t cfg1 = (cfg0 & ~(0xfu << 2)) | (1u << 9);
++		touch_wr(west, c, cfg1);
++		touch_wait(20);
++		printf("A05S TOUCH: rst86 released cfg=%#x/%#x io=%#x/%#x\n",
++		    cfg0, touch_rd(west, c), io0, touch_rd(west, o));
++	}
+ 	printf("A05S TOUCH: se0 fw=%#x ifdis=%#x hwtx=%#x hwrx=%#x gpi=%d cpha=%#x cpol=%#x demux=%#x mclk=%#x\n",
+ 	    rn.fw, rn.ifdis, rn.hwtx, rn.hwrx, rg.mem != 0, rn.c_cpha, rn.c_cpol, rn.c_demux, rn.c_mclk);
+ 	touch_sync();
+@@ -2531,7 +2553,7 @@
+ 	touch_sync();
+ 	touch_mark("MARK map west\n");
+ 	vm_offset_t west = ml_io_map(a05s_touch ? TOUCH_TLMM_PA : TOUCH_WEST_PA,
+-	    a05s_touch ? 0x80000u : 0x58000u);
++	    a05s_touch ? TOUCH_TLMM_MAP : 0x58000u);
+ 	printf("A05S TOUCH: map west=%p\n", (void *)west);
+ 	touch_sync();
+ 	touch_mark("MARK map se\n");
+@@ -2643,8 +2665,12 @@
+ 		 * +0x1000 variant follows. 0x56000/0x57000 are GPIO86 either way.
+ 		 */
+ 		static const uint32_t cand[] = {
+-			0x01000u, 0x02000u, 0x03000u, 0x04000u,
+-			0x56000u, 0x57000u,
++			TOUCH_TILE_WEST + 0x00000u,     /* gpio0  ctl */
++			TOUCH_TILE_WEST + 0x01000u,     /* gpio1  ctl */
++			TOUCH_TILE_WEST + 0x02000u,     /* gpio2  ctl */
++			TOUCH_TILE_WEST + 0x03000u,     /* gpio3  ctl */
++			TOUCH_TILE_WEST + 0x56000u,     /* gpio86 ctl (TDDI reset) */
++			TOUCH_TILE_WEST + 0x50000u,     /* gpio80 ctl (TDDI irq) */
+ 		};
+ 		{
+ 			unsigned i;
+@@ -2659,10 +2685,10 @@
+ 				printf("A05S TOUCH: rd %#x = %#x\n", cand[i],
+ 				    touch_rd(west, cand[i]));
+ 			}
+-			rn.pin_after[0] = touch_rd(west, 0x01000u);
+-			rn.pin_after[1] = touch_rd(west, 0x02000u);
+-			rn.pin_after[2] = touch_rd(west, 0x03000u);
+-			rn.pin_after[3] = touch_rd(west, 0x04000u);
++			rn.pin_after[0] = touch_rd(west, TOUCH_TILE_WEST + 0x00000u);
++			rn.pin_after[1] = touch_rd(west, TOUCH_TILE_WEST + 0x01000u);
++			rn.pin_after[2] = touch_rd(west, TOUCH_TILE_WEST + 0x02000u);
++			rn.pin_after[3] = touch_rd(west, TOUCH_TILE_WEST + 0x03000u);
+ 		}
+ 		printf("A05S TOUCH: pins done\n");
+ 	} else {
+@@ -2878,7 +2904,7 @@
+ 	printf("SWEET TOUCH: mapping GCC/TLMM/SE2\n");
+ 	st.gcc = ml_io_map(TOUCH_GCC_PA, 0x80000);
+ 	st.west = ml_io_map(a05s_touch ? TOUCH_TLMM_PA : TOUCH_WEST_PA,
+-	    a05s_touch ? 0x100000u : 0x58000u);
++	    a05s_touch ? TOUCH_TLMM_MAP : 0x58000u);
+ 	st.east = a05s_touch ? st.west : ml_io_map(TOUCH_EAST_PA, 0x25000);
+ 	st.se = ml_io_map(TOUCH_SE_PA, 0x4000);
+ 	if (!st.gcc || !st.west || !st.east || !st.se) {
