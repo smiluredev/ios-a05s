@@ -1,0 +1,268 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -904,53 +904,106 @@
+ 	uint64_t total, seq;
+ };
+ 
++/*
++ * Flushing used to live only in the thread below. If any write failed the
++ * thread printed one line and returned, and everything after it (the whole
++ * bring-up, and any panic) was lost: the ring header stayed at flush #1
++ * (bw55/bw56). The dump is a function now so a driver can persist what it
++ * just printed *before* it touches a register that may hang the SoC, and so
++ * the panic path can save the panic text.
++ */
++static uint64_t sweet_log_flushed;
++static uint64_t sweet_log_seq;
++
++/* Caller holds sweet_ufs_lock. Returns 0 on success. */
++static int
++sweet_log_dump_locked(uint64_t total)
++{
++	uint64_t base = su.first_block + su.nblocks - SWEET_LOG_BLOCKS;
++	void *bounce = (void *)(su.dma + DMA_BOUNCE);
++	uint64_t pos = total - sweet_log_flushed >= SWEET_LOG_SIZE ?
++	    total - SWEET_LOG_SIZE : sweet_log_flushed;
++	int error = 0;
++
++	while (pos < total && !error) {
++		uint32_t off = (uint32_t)(pos % SWEET_LOG_SIZE);
++		uint32_t blk = off / UFS_BLOCK;
++		uint64_t need = ((uint64_t)off % UFS_BLOCK + (total - pos) + UFS_BLOCK - 1) / UFS_BLOCK;
++		uint32_t n = (uint32_t)MIN(MIN(need, (uint64_t)(SWEET_LOG_SIZE / UFS_BLOCK - blk)),
++		    (uint64_t)(BOUNCE_SIZE / UFS_BLOCK));
++		memcpy(bounce, sweet_log_ring + (uint64_t)blk * UFS_BLOCK, n * UFS_BLOCK);
++		error = ufs_write_blocks(base + 1 + blk, n);
++		pos += (uint64_t)(blk + n) * UFS_BLOCK - off;
++	}
++	if (!error) {
++		struct sweet_log_header h = {
++			.magic = { 'S', 'W', 'E', 'E', 'T', 'L', 'O', 'G' },
++			.version = 1, .size = SWEET_LOG_SIZE, .total = total, .seq = sweet_log_seq + 1,
++		};
++		bzero(bounce, UFS_BLOCK);
++		memcpy(bounce, &h, sizeof(h));
++		error = ufs_write_blocks(base, 1);
++	}
++	if (!error) {
++		error = ufs_sync_cache();
++	}
++	if (!error) {
++		sweet_log_flushed = total;
++		sweet_log_seq++;
++	}
++	return error;
++}
++
++/*
++ * Persist the console output produced so far. Any thread may call this; it
++ * never blocks (try-lock) so it is usable from the panic path and from a
++ * driver that is about to touch hardware that can hang the SoC.
++ */
++void
++sweet_log_sync(void)
++{
++	if (!su.writable || su.nblocks < 2 * SWEET_LOG_BLOCKS) {
++		return;
++	}
++	if (!lck_mtx_try_lock(&sweet_ufs_lock)) {
++		return;
++	}
++	uint64_t total = os_atomic_load(&sweet_log_total, relaxed);
++	if (total != sweet_log_flushed) {
++		(void)sweet_log_dump_locked(total);
++	}
++	lck_mtx_unlock(&sweet_ufs_lock);
++}
++
++/* osfmk/kern/debug.c, after the panic text reached the console. */
++void
++sweet_log_panic_flush(void)
++{
++	sweet_log_sync();
++}
++
+ static void
+ sweet_log_thread(__unused void *arg, __unused wait_result_t wr)
+ {
+ 	uint64_t base = su.first_block + su.nblocks - SWEET_LOG_BLOCKS;
+-	uint64_t flushed = 0, seq = 0;
+-	void *bounce = (void *)(su.dma + DMA_BOUNCE);
+ 
+ 	printf("SWEET LOG: console log to the last %u KiB of the partition (block 0x%llx)\n",
+ 	    SWEET_LOG_BLOCKS * UFS_BLOCK >> 10, base);
+ 	for (;;) {
+ 		(void)tsleep(&sweet_log_chan, PZERO, "sweetlog", hz * (int)sweet_log_secs);
+ 		uint64_t total = os_atomic_load(&sweet_log_total, relaxed);
+-		if (total == flushed) {
++		if (total == sweet_log_flushed) {
+ 			continue;
+ 		}
+-		uint64_t pos = total - flushed >= SWEET_LOG_SIZE ? total - SWEET_LOG_SIZE : flushed;
+-		int error = 0;
+-
+ 		lck_mtx_lock(&sweet_ufs_lock);
+-		while (pos < total && !error) {
+-			uint32_t off = (uint32_t)(pos % SWEET_LOG_SIZE);
+-			uint32_t blk = off / UFS_BLOCK;
+-			uint64_t need = ((uint64_t)off % UFS_BLOCK + (total - pos) + UFS_BLOCK - 1) / UFS_BLOCK;
+-			uint32_t n = (uint32_t)MIN(MIN(need, (uint64_t)(SWEET_LOG_SIZE / UFS_BLOCK - blk)),
+-			    (uint64_t)(BOUNCE_SIZE / UFS_BLOCK));
+-			memcpy(bounce, sweet_log_ring + (uint64_t)blk * UFS_BLOCK, n * UFS_BLOCK);
+-			error = ufs_write_blocks(base + 1 + blk, n);
+-			pos += (uint64_t)(blk + n) * UFS_BLOCK - off;
+-		}
+-		if (!error) {
+-			struct sweet_log_header h = {
+-				.magic = { 'S', 'W', 'E', 'E', 'T', 'L', 'O', 'G' },
+-				.version = 1, .size = SWEET_LOG_SIZE, .total = total, .seq = ++seq,
+-			};
+-			bzero(bounce, UFS_BLOCK);
+-			memcpy(bounce, &h, sizeof(h));
+-			error = ufs_write_blocks(base, 1);
+-		}
+-		if (!error) {
+-			error = ufs_sync_cache();
+-		}
++		int error = sweet_log_dump_locked(total);
+ 		lck_mtx_unlock(&sweet_ufs_lock);
+ 		if (error) {
+-			printf("SWEET LOG: write failed (%d), stopping\n", error);
+-			return;
++			/* Keep trying: the RAM ring is the only copy we have. */
++			printf("SWEET LOG: write failed (%d) at %llu, retrying\n", error,
++			    (unsigned long long)total);
++			(void)tsleep(&sweet_log_chan, PZERO, "sweetlogfail", hz);
+ 		}
+-		flushed = total;
+ 	}
+ }
+ 
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -34,6 +34,21 @@
+ extern bool topaz_smmu_identity(uint32_t sid, uint32_t mask, const char *name);  /* TopazModem.cpp */
+ void sweet_touch_init(void);
+ 
++/*
++ * Persist the console output produced so far (bsd/dev/sweet_ufs.c). The
++ * persistent log flushes once a second from its own thread, which is useless
++ * when the next register write hangs the SoC and the machine resets before
++ * that thread runs: the last second of prints, i.e. exactly the interesting
++ * one, is lost. Call this after printing, before touching hardware.
++ */
++extern void sweet_log_sync(void);
++
++static void
++touch_sync(void)
++{
++	sweet_log_sync();
++}
++
+ #define TOUCH_SE_PA      0x04a88000u /* QUP0 SE2 */
+ #define TOUCH_GCC_PA     0x01400000u
+ #define TOUCH_WEST_PA    0x00500000u /* TLMM 0x400000 + WEST tile: GPIO 6/7/80/86 */
+@@ -136,8 +151,10 @@
+ 		printf("A05S TOUCH: wait %u ms dl=%llu aw=%d\n", ms,
+ 			(unsigned long long)deadline, aw);
+ 	thread_block(THREAD_CONTINUE_NULL);
+-	if (ms >= 1000u)
++	if (ms >= 1000u) {
+ 		printf("A05S TOUCH: wait woke %u ms\n", ms);
++		touch_sync();
++	}
+ }
+ 
+ static bool
+@@ -2148,6 +2165,7 @@
+ 	/* GPIO36 is the haptic enable, not TDDI AVDD; poking it here hung the
+ 	 * SoC at bring-up (1044). The TDDI rails are left on by the bootloader. */
+ 	printf("A05S TOUCH: bringup start\n");
++	touch_sync();
+ 	uint8_t buf[HX_REPORT_SZ];
+ 	int e = -1;
+ 
+@@ -2156,6 +2174,7 @@
+ 	rn.stage = "himax reset";
+ 	printf("A05S TOUCH: pins=%#x %#x %#x %#x\n",
+ 	    rn.pin_after[0], rn.pin_after[1], rn.pin_after[2], rn.pin_after[3]);
++	touch_sync();
+ 	{
+ 		static const uint8_t pat[8] = { 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88 };
+ 		uint8_t lb[8];
+@@ -2164,18 +2183,22 @@
+ 		touch_wr(rn.se, RAIN_SPI_LOOPBACK, 0);
+ 		printf("A05S TOUCH: fifo loopback e=%d %02x %02x %02x %02x %02x %02x %02x %02x\n",
+ 		    le, lb[0], lb[1], lb[2], lb[3], lb[4], lb[5], lb[6], lb[7]);
++		touch_sync();
+ 	}
+ 	/* TDDI: GPIO86 is the shared panel+touch reset. Pulsing it low once the
+ 	 * DSI panel is up kills the display and the watchdog resets the SoC
+ 	 * (1051 boot loop). Only make sure the line is released. */
+ 	printf("A05S TOUCH: reset release\n");
++	touch_sync();
+ 	touch_gpio(HX_GPIO_RST, 0, 0, 2, true, true);
+ 	touch_wait(100);
+ 	printf("A05S TOUCH: rst cfg=%#x io=%#x\n",
+ 	    touch_rd(st.west, TOUCH_GPIO_CFG(HX_GPIO_RST)),
+ 	    touch_rd(st.west, TOUCH_GPIO_IO(HX_GPIO_RST)));
++	touch_sync();
+ 	printf("A05S TOUCH: se0 fw=%#x ifdis=%#x hwtx=%#x hwrx=%#x gpi=%d cpha=%#x cpol=%#x demux=%#x mclk=%#x\n",
+ 	    rn.fw, rn.ifdis, rn.hwtx, rn.hwrx, rg.mem != 0, rn.c_cpha, rn.c_cpol, rn.c_demux, rn.c_mclk);
++	touch_sync();
+ 	if (himax_fw_map() == 0) {
+ 		if (himax_fw_prepare() == 0) {
+ 			(void)himax_download();
+@@ -2409,11 +2432,14 @@
+ 	printf("A05S TOUCH: probe enter\n");
+ 	vm_offset_t gcc = ml_io_map(TOUCH_GCC_PA, 0x80000);
+ 	printf("A05S TOUCH: map gcc=%p\n", (void *)gcc);
++	touch_sync();
+ 	vm_offset_t west = ml_io_map(a05s_touch ? TOUCH_TLMM_PA : TOUCH_WEST_PA,
+ 	    a05s_touch ? 0x80000u : 0x58000u);
+ 	printf("A05S TOUCH: map west=%p\n", (void *)west);
++	touch_sync();
+ 	rn.se = ml_io_map(RAIN_SE0_PA, 0x4000);
+ 	printf("A05S TOUCH: map se=%p\n", (void *)rn.se);
++	touch_sync();
+ 	if (!gcc || !west || !rn.se) {
+ 		rn.err = -10;
+ 		return;
+@@ -2662,6 +2688,7 @@
+ 	printf("SWEET TOUCH: starting in %u s\n", delay_s);
+ 	touch_wait(delay_s * 1000u);
+ 	printf("A05S TOUCH: delay done (%u s)\n", delay_s);
++	touch_sync();
+ 	if (rain_touch_on) {
+ 		uint32_t stop = 0;
+ 		(void)PE_parse_boot_argn("raintouchpanic", &stop, sizeof(stop));
+--- a/osfmk/kern/debug.c
++++ b/osfmk/kern/debug.c
+@@ -247,6 +247,13 @@
+ extern kern_return_t do_stackshot(void);
+ extern void PE_panic_hook(const char*);
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++/* bsd/dev/sweet_ufs.c: persist the console ring (the panic text included) */
++extern void sweet_log_panic_flush(void);
++#else
++#define sweet_log_panic_flush() do { } while (0)
++#endif
++
+ #define NESTEDDEBUGGERENTRYMAX 5
+ static TUNABLE(unsigned int, max_debugger_entry_count, "nested_panic_max",
+     NESTEDDEBUGGERENTRYMAX);
+@@ -1279,6 +1286,13 @@
+ #pragma clang diagnostic pop
+ 		}
+ 		paniclog_append_noflush("\n");
++		/*
++		 * The persistent console log is flushed from its own thread
++		 * once a second, and a panic stops the other CPUs before that
++		 * thread can run: save the ring now or the panic text is lost
++		 * (the a05s bring-up resets looked like silent reboots).
++		 */
++		sweet_log_panic_flush();
+ 	}
+ #if defined(__x86_64__)
+ 	else if (((debugger_current_op == DBOP_DEBUGGER) && debugger_is_panic)) {
