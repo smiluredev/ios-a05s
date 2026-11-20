@@ -1,0 +1,27 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -2009,5 +2009,2 @@
+ /* One-boot identification: Himax, Ilitek or an I2C touch, and is MISO alive? */
+-extern int sweet_i2c_bus_read(int bus, uint8_t addr, uint8_t reg,
+-    uint8_t *buf, unsigned len);
+-
+ static void
+@@ -2027,5 +2024,4 @@
+ 	static const unsigned cpol[2] = { 0, 4 };
+-	uint8_t rx[8], b[2];
++	uint8_t rx[8];
+ 	unsigned a, m, p, k;
+-	int e;
+ 
+@@ -2033,10 +2029,3 @@
+ 	    touch_rd(st.west, TOUCH_GPIO_IO(TOUCH_PIN_IRQ)));
+-	b[0] = b[1] = 0;
+-	e = sweet_i2c_bus_read(2, 0x20, 0x00, b, 1);
+-	printf("A05S ID: i2c 0x20 e=%d v=%02x\n", e, b[0]);
+-	touch_wait(20);
+-	b[0] = 0;
+-	e = sweet_i2c_bus_read(2, 0x62, 0x00, b, 1);
+-	printf("A05S ID: i2c 0x62 e=%d v=%02x\n", e, b[0]);
+-	touch_wait(20);
++	printf("A05S ID: spi sweep start\n");
+ 	for (a = 0; a < 2u; a++) {
