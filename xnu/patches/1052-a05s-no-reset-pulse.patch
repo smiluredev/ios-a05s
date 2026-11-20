@@ -1,0 +1,28 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -2044,7 +2044,7 @@
+ 	return got;
+ }
+ 
+-static void
++static void __unused
+ a05s_bitbang(void)
+ {
+ 	static const uint8_t tx[3] = { 0xf3u, 0x30u, 0x00u };
+@@ -2160,12 +2160,12 @@
+ 		printf("A05S TOUCH: fifo loopback e=%d %02x %02x %02x %02x %02x %02x %02x %02x\n",
+ 		    le, lb[0], lb[1], lb[2], lb[3], lb[4], lb[5], lb[6], lb[7]);
+ 	}
+-	touch_gpio(HX_GPIO_RST, 0, 0, 2, true, false);
+-	touch_wait(10);
++	/* TDDI: GPIO86 is the shared panel+touch reset. Pulsing it low once the
++	 * DSI panel is up kills the display and the watchdog resets the SoC
++	 * (1051 boot loop). Only make sure the line is released. */
++	printf("A05S TOUCH: reset release\n");
+ 	touch_gpio(HX_GPIO_RST, 0, 0, 2, true, true);
+ 	touch_wait(100);
+-	a05s_bitbang();
+-	touch_wait(100);
+ 	printf("A05S TOUCH: rst cfg=%#x io=%#x\n",
+ 	    touch_rd(st.west, TOUCH_GPIO_CFG(HX_GPIO_RST)),
+ 	    touch_rd(st.west, TOUCH_GPIO_IO(HX_GPIO_RST)));
