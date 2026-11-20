@@ -1,0 +1,27 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -2699,6 +2699,24 @@
+ 			rn.pin_after[3] = touch_rd(west, TOUCH_TILE_WEST + 0x03000u);
+ 		}
+ 		printf("A05S TOUCH: pins done\n");
++		/*
++		 * 1072: the QUP0 SPI pads were still in GPIO mode (cfg 0x3 =
++		 * mux 0, pull-up), so the SE's FIFO loopback passed while not
++		 * one clock edge reached the HX83112F — that is the real
++		 * reason every read came back zero. The Android DT wants
++		 * function qup0 (1), drive 6 mA (regval 2), bias-disable:
++		 * pinctrl-msh layout on khaje is mux 2-5, drv 6-8, pull 0-1,
++		 * so that is cfg 0x84.
++		 */
++		{
++			unsigned p;
++			for (p = 0; p < 4; p++) {
++				uint32_t off = TOUCH_TILE_WEST + p * 0x1000u;
++				touch_wr(west, off, 0x84u);
++				printf("A05S TOUCH: gpio%u muxed -> %#x\n", p,
++				    touch_rd(west, off));
++			}
++		}
+ 	} else {
+ 	rn.stage = "pins";
+ 	for (unsigned p = 0; p < 4; p++) {
