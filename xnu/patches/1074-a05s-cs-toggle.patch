@@ -1,0 +1,18 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -2760,7 +2760,14 @@
+ 	touch_wr(rn.se, RAIN_SPI_LOOPBACK, 0);
+ 	touch_wr(rn.se, RAIN_SPI_DEMUXSEL, a05s_touch ? 2u : 0u); /* a05s: CS2, rain: CS0 */
+ 	touch_wr(rn.se, RAIN_SPI_DEMUXINV, 0);
+-	touch_wr(rn.se, RAIN_SPI_TRANSCFG, 0);             /* CS held for a command */
++	/*
++	 * 1074: CS_TOGGLE. With 0 the SE asserts CS on the first transfer and
++	 * never releases it, so every later command (and the FIFO loopback that
++	 * runs first) is clocked inside one endless CS window; the HX83112F
++	 * needs the CS edge to delimit a frame, which is why it never answered.
++	 * The downstream spi-msm-geni driver sets this bit per transfer.
++	 */
++	touch_wr(rn.se, RAIN_SPI_TRANSCFG, 1);
+ 	touch_wr(rn.se, RAIN_SPI_WORDLEN, 8u - 4u);        /* 8-bit words */
+ 	touch_wr(rn.se, RAIN_SPI_PREPOST, 0);
+ 	touch_wr(rn.se, RAIN_SPI_DELAYS, 0);
