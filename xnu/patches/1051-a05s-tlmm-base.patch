@@ -1,0 +1,60 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -38,6 +38,7 @@
+ #define TOUCH_GCC_PA     0x01400000u
+ #define TOUCH_WEST_PA    0x00500000u /* TLMM 0x400000 + WEST tile: GPIO 6/7/80/86 */
+ #define TOUCH_EAST_PA    0x00d00000u /* TLMM 0x400000 + EAST tile: GPIO 36 */
++#define TOUCH_TLMM_PA    0x00400000u /* khaje/A05s: a single TLMM, all pins live here */
+ #define TOUCH_GCC_VOTE   0x7900cu    /* QUP0 wrapper + SE2 vote, bits 0x13c0 */
+ #define TOUCH_RCG       0x1f3a8u    /* QUP0 S2 CMD; CFG +4, CBCR -4 (gcc-khaje.c) */
+ #define TOUCH_PIN_RESET  86u
+@@ -159,13 +160,16 @@
+ 	vm_offset_t tile = touch_tile(pin);
+ 	uint32_t off = TOUCH_GPIO_CFG(pin);
+ 	uint32_t cfg = touch_rd(tile, off);
++	unsigned latch = a05s_touch ? 1u : 2u;
+ 	if (out) {
+ 		/* Set the desired latch before enabling output (reset is active low). */
+ 		touch_wr(tile, TOUCH_GPIO_IO(pin),
+-		    (touch_rd(tile, TOUCH_GPIO_IO(pin)) & ~2u) | (high ? 2u : 0u));
++		    (touch_rd(tile, TOUCH_GPIO_IO(pin)) & ~latch) | (high ? latch : 0u));
+ 	}
+ 	cfg &= ~0x3ffu;
+-	cfg |= (mux << 2) | pull | (drive << 6) | (out ? 0x200u : 0u);
++	/* pinctrl-msm on khaje: func 2-4, pull 5-6, drive 7-9, OE bit 9. */
++	cfg |= (mux << 2) | (out ? 0x200u : 0u) |
++	    (a05s_touch ? ((pull << 5) | (drive << 7)) : (pull | (drive << 6)));
+ 	touch_wr(tile, off, cfg);
+ }
+ 
+@@ -2313,7 +2317,8 @@
+ {
+ 	rn.stage = "map";
+ 	vm_offset_t gcc = ml_io_map(TOUCH_GCC_PA, 0x80000);
+-	vm_offset_t west = ml_io_map(TOUCH_WEST_PA, 0x58000);
++	vm_offset_t west = ml_io_map(a05s_touch ? TOUCH_TLMM_PA : TOUCH_WEST_PA,
++	    a05s_touch ? 0x100000u : 0x58000u);
+ 	rn.se = ml_io_map(RAIN_SE0_PA, 0x4000);
+ 	if (!gcc || !west || !rn.se) {
+ 		rn.err = -10;
+@@ -2321,6 +2326,8 @@
+ 	}
+ 	st.gcc = gcc;
+ 	st.west = west;
++	if (a05s_touch)
++		st.east = west;   /* khaje: one TLMM */
+ 
+ 	rn.stage = "clocks";
+ 	touch_wr(gcc, TOUCH_GCC_VOTE, touch_rd(gcc, TOUCH_GCC_VOTE) | RAIN_GCC_VOTE_SE0);
+@@ -2561,8 +2568,9 @@
+ 	st.stage = "map";
+ 	printf("SWEET TOUCH: mapping GCC/TLMM/SE2\n");
+ 	st.gcc = ml_io_map(TOUCH_GCC_PA, 0x80000);
+-	st.west = ml_io_map(TOUCH_WEST_PA, 0x58000);
+-	st.east = ml_io_map(TOUCH_EAST_PA, 0x25000);
++	st.west = ml_io_map(a05s_touch ? TOUCH_TLMM_PA : TOUCH_WEST_PA,
++	    a05s_touch ? 0x100000u : 0x58000u);
++	st.east = a05s_touch ? st.west : ml_io_map(TOUCH_EAST_PA, 0x25000);
+ 	st.se = ml_io_map(TOUCH_SE_PA, 0x4000);
+ 	if (!st.gcc || !st.west || !st.east || !st.se) {
+ 		printf("SWEET TOUCH: MMIO mapping failed\n");
