@@ -1,0 +1,46 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -2413,6 +2413,8 @@
+ 	st.west = west;
+ 	if (a05s_touch)
+ 		st.east = west;   /* khaje: one TLMM */
++	printf("A05S TOUCH: probe map gcc=%p west=%p se=%p\n",
++		(void *)gcc, (void *)west, (void *)rn.se);
+ 
+ 	rn.stage = "clocks";
+ 	touch_wr(gcc, TOUCH_GCC_VOTE, touch_rd(gcc, TOUCH_GCC_VOTE) | RAIN_GCC_VOTE_SE0);
+@@ -2457,6 +2459,15 @@
+ 	}
+ 
+ 	rn.stage = "pins";
++	if (a05s_touch) {
++		/* The bootloader already muxed GPIO0..3 to qup0; only observe. */
++		for (unsigned p = 0; p < 4; p++) {
++			rn.pin_after[p] = touch_rd(west, TOUCH_GPIO_CFG(p));
++		}
++		printf("A05S TOUCH: pins %#x %#x %#x %#x\n",
++			rn.pin_after[0], rn.pin_after[1], rn.pin_after[2], rn.pin_after[3]);
++	} else {
++	rn.stage = "pins";
+ 	for (unsigned p = 0; p < 4; p++) {
+ 		uint32_t cfg = touch_rd(west, TOUCH_GPIO_CFG(p));
+ 		rn.pin_before[p] = cfg;
+@@ -2465,6 +2476,7 @@
+ 		}
+ 		rn.pin_after[p] = touch_rd(west, TOUCH_GPIO_CFG(p));
+ 	}
++	}
+ 
+ 	rn.stage = "se0 spi init";
+ 	if (!rg.mem) {
+@@ -2644,7 +2656,9 @@
+ 		uint32_t stop = 0;
+ 		(void)PE_parse_boot_argn("raintouchpanic", &stop, sizeof(stop));
+ 		rain_touch_probe();
+-		if (rn.err || !nf.wrote || stop == 1) {
++		printf("A05S TOUCH: probe ret err=%d stage=%s wrote=%d\n",
++			rn.err, rn.stage ? rn.stage : "?", nf.wrote);
++		if ((rn.err || !nf.wrote || stop == 1) && !a05s_touch) {
+ 			rain_touch_report();    /* panics with every reading */
+ 		}
+ 		rain_touch_run(stop);
