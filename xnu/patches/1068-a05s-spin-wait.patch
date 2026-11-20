@@ -1,0 +1,64 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -133,7 +133,6 @@
+ 	int s_lasterr, s_lastx, s_lasty;
+ 	uint8_t s_raw[12];
+ } st;
+-static int touch_sleep_chan;
+ static int rain_touch_on;      /* boot-arg raintouch=1: Novatek SPI probe (rain) */
+ static int a05s_touch;         /* boot-arg a05stouch=1: Himax HX83112F on QUP0 SE0 CS2 */
+ 
+@@ -171,16 +170,25 @@
+ touch_wait(unsigned ms)
+ {
+ 	uint64_t deadline;
++
++	/*
++	 * 1068: spin on the hardware counter instead of assert_wait_deadline +
++	 * thread_block. The bw68/bw69 boots died on the 10th/11th 1 s wait (the
++	 * arm print came out, `wait woke` never did, then the root filesystem
++	 * stalled and the phone reset), so the sleep path itself is what breaks
++	 * here. This thread runs once at bring-up; spinning for a few seconds is
++	 * fine and removes the scheduler from the equation.
++	 */
+ 	clock_interval_to_deadline(ms, NSEC_PER_MSEC, &deadline);
+-	boolean_t aw = assert_wait_deadline(&touch_sleep_chan, THREAD_UNINT, deadline);
+-	if (ms >= 1000u)
+-		printf("A05S TOUCH: wait %u ms dl=%llu aw=%d\n", ms,
+-			(unsigned long long)deadline, aw);
+-	thread_block(THREAD_CONTINUE_NULL);
+ 	if (ms >= 1000u) {
+-		sweet_log_mark("MARK wake\n");
+-		printf("A05S TOUCH: wait woke %u ms\n", ms);
+-		touch_sync();
++		printf("A05S TOUCH: wait %u ms dl=%llu\n", ms,
++		    (unsigned long long)deadline);
++	}
++	while (mach_absolute_time() < deadline) {
++		/* spin: no scheduler, no timers */
++	}
++	if (ms >= 1000u) {
++		printf("A05S TOUCH: wait done %u ms\n", ms);
+ 	}
+ }
+ 
+@@ -2833,18 +2841,7 @@
+ 	printf("SWEET TOUCH: starting in %u s\n", delay_s);
+ 	touch_wait(delay_s * 1000u);
+ 	touch_mark("MARK wake\n");
+-	/*
+-	 * 1059: one breadcrumb per second for ten seconds, before touching any
+-	 * hardware. If the SoC resets at the wake itself these stop immediately
+-	 * and none of the bring-up below is to blame; if they keep coming, the
+-	 * wake is fine and the reset happens further down.
+-	 */
+-	for (unsigned i = 1; i <= 10; i++) {
+-		char b[32];
+-		touch_wait(1000);
+-		snprintf(b, sizeof(b), "MARK beat %u\n", i);
+-		touch_mark(b);
+-	}
++	/* 1068: the ten 1 s heartbeat beats are gone; the sleep was the bug. */
+ 	touch_mark("MARK delay done\n");
+ 	printf("A05S TOUCH: delay done (%u s)\n", delay_s);
+ 	touch_sync();
