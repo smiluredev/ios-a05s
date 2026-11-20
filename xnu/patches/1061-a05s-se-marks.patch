@@ -1,0 +1,50 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -979,6 +979,8 @@
+ void
+ sweet_log_panic_flush(void)
+ {
++	/* panic text may bypass the console ring: at least record the panic */
++	sweet_log_append("PANIC\n", 6);
+ 	sweet_log_sync();
+ }
+ 
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -2560,9 +2560,18 @@
+ 	rn.hwrx = touch_rd(rn.se, SE_HW_RX);
+ 	rn.status = touch_rd(rn.se, SE_STATUS);
+ 	touch_mark("MARK se reads ok\n");
++	touch_mark("MARK se read ifdis\n");
+ 	rn.ifdis = touch_rd(rn.se, 0x64);        /* GENI_IF_DISABLE_RO: bit 0 FIFO_IF_DISABLE */
++	touch_mark("MARK se read fws\n");
+ 	rn.fws = touch_rd(rn.se, 0x6c);          /* GENI_S_FW_REVISION_RO */
++	touch_mark("MARK se read seqcfg\n");
+ 	rn.seqcfg = touch_rd(rn.se, 0x20);       /* GENI_FORCE_DEFAULT as left by ABL */
++	{
++		char m[80];
++		snprintf(m, sizeof(m), "MARK se ifdis=%#x fws=%#x seq=%#x st=%#x\n",
++		    rn.ifdis, rn.fws, rn.seqcfg, rn.status);
++		touch_mark(m);
++	}
+ 	if (((rn.fw >> 8) & 0xffu) != 1u) {
+ 		rn.err = -13;                   /* not SPI firmware: touch nothing else */
+ 		return;
+@@ -2573,7 +2582,9 @@
+ 	}
+ 	if (rn.ifdis & 1u) {
+ 		/* FIFO interface off: GPI DMA only */
++		touch_mark("MARK gpi setup\n");
+ 		int ge = rain_gpi_setup();
++		touch_mark("MARK gpi setup done\n");
+ 		if (ge) {
+ 			rn.err = ge;
+ 			rn.stage = rg.gstage;
+@@ -2797,6 +2808,7 @@
+ 		uint32_t stop = 0;
+ 		(void)PE_parse_boot_argn("raintouchpanic", &stop, sizeof(stop));
+ 		rain_touch_probe();
++		touch_mark("MARK probe ret\n");
+ 		printf("A05S TOUCH: probe ret err=%d stage=%s wrote=%d\n",
+ 			rn.err, rn.stage ? rn.stage : "?", nf.wrote);
+ 		if ((rn.err || !nf.wrote || stop == 1) && !a05s_touch) {
