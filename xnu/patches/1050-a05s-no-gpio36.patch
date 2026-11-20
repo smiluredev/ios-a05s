@@ -1,0 +1,15 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -2053,9 +2053,9 @@
+ static void
+ a05s_touch_bringup(void)
+ {
+-	touch_gpio(TOUCH_PIN_AVDD, 0, 3, 3, true, true);   /* A05s: TDDI AVDD on GPIO36 */
+-	touch_wait(10);
+-	printf("A05S TOUCH: avdd on\n");
++	/* GPIO36 is the haptic enable, not TDDI AVDD; poking it here hung the
++	 * SoC at bring-up (1044). The TDDI rails are left on by the bootloader. */
++	printf("A05S TOUCH: bringup start\n");
+ 	uint8_t buf[HX_REPORT_SZ];
+ 	int e = -1;
+ 
