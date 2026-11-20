@@ -1,0 +1,56 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -2516,27 +2516,50 @@
+ 	touch_mark("MARK maps ok\n");
+ 
+ 	rn.stage = "clocks";
+-	touch_mark("MARK clocks\n");
+-	touch_wr(gcc, TOUCH_GCC_VOTE, touch_rd(gcc, TOUCH_GCC_VOTE) | RAIN_GCC_VOTE_SE0);
+-	rn.vote = touch_rd(gcc, TOUCH_GCC_VOTE);
++	/* 1060: one breadcrumb per register access: an access to a clock-gated
++	 * block does not return, so the last one names the block. */
++	{
++		char m[64];
++		touch_mark("MARK gcc read vote\n");
++		uint32_t v = touch_rd(gcc, TOUCH_GCC_VOTE);
++		snprintf(m, sizeof(m), "MARK gcc vote=%#x\n", v);
++		touch_mark(m);
++		touch_wr(gcc, TOUCH_GCC_VOTE, v | RAIN_GCC_VOTE_SE0);
++		rn.vote = touch_rd(gcc, TOUCH_GCC_VOTE);
++		snprintf(m, sizeof(m), "MARK gcc voted=%#x\n", rn.vote);
++		touch_mark(m);
++	}
++	touch_mark("MARK gcc rcg cfg\n");
+ 	touch_wr(gcc, RAIN_RCG_SE0 + 4u, 1u);               /* XO, divider 1: 19.2 MHz */
++	touch_mark("MARK gcc rcg en\n");
+ 	touch_wr(gcc, RAIN_RCG_SE0, touch_rd(gcc, RAIN_RCG_SE0) | 1u);
++	touch_mark("MARK gcc rcg wait\n");
+ 	if (!touch_wait_clear(gcc, RAIN_RCG_SE0, 1u)) {
+ 		rn.err = -11;
+ 		return;
+ 	}
+ 	rn.rcgcfg = touch_rd(gcc, RAIN_RCG_SE0 + 4u);
+ 	rn.cbcr = touch_rd(gcc, RAIN_RCG_SE0 - 4u);
++	touch_mark("MARK gcc cbcr wait\n");
+ 	if (!touch_wait_clear(gcc, RAIN_RCG_SE0 - 4u, 1u << 31)) {
+ 		rn.err = -12;                   /* SE0 branch clock off */
+ 		return;
+ 	}
++	touch_mark("MARK gcc clocks ok\n");
+ 
+ 	rn.stage = "se0 fw";
++	touch_mark("MARK se read fw\n");
+ 	rn.fw = touch_rd(rn.se, SE_FW);
++	{
++		char m[64];
++		snprintf(m, sizeof(m), "MARK se fw=%#x\n", rn.fw);
++		touch_mark(m);
++	}
++	touch_mark("MARK se read rest\n");
+ 	rn.hwtx = touch_rd(rn.se, SE_HW_TX);
+ 	rn.hwrx = touch_rd(rn.se, SE_HW_RX);
+ 	rn.status = touch_rd(rn.se, SE_STATUS);
++	touch_mark("MARK se reads ok\n");
+ 	rn.ifdis = touch_rd(rn.se, 0x64);        /* GENI_IF_DISABLE_RO: bit 0 FIFO_IF_DISABLE */
+ 	rn.fws = touch_rd(rn.se, 0x6c);          /* GENI_S_FW_REVISION_RO */
+ 	rn.seqcfg = touch_rd(rn.se, 0x20);       /* GENI_FORCE_DEFAULT as left by ABL */
