@@ -27,18 +27,33 @@
  static void
 --- a/bsd/dev/sweet_touch.c
 +++ b/bsd/dev/sweet_touch.c
-@@ -2619,18 +2619,22 @@
+@@ -2619,18 +2619,27 @@
  		 * Nothing is written here: the reset line is shared with the
  		 * panel and pulsing it takes the display down.
  		 */
 -		touch_mark("MARK pins read\n");
-+		/* one print per pin: the last line names the read that hangs */
-+		for (unsigned p = 0; p < 4; p++) {
-+			printf("A05S TOUCH: gpio%u cfg=%#x\n", p,
-+			    touch_rd(west, TOUCH_GPIO_CFG(p)));
-+		}
- 		for (unsigned p = 0; p < 4; p++) {
- 			rn.pin_after[p] = touch_rd(west, TOUCH_GPIO_CFG(p));
+-		for (unsigned p = 0; p < 4; p++) {
+-			rn.pin_after[p] = touch_rd(west, TOUCH_GPIO_CFG(p));
++		/*
++		 * 1067: one print per read, explicit offsets, so the last line
++		 * before a hang names the address. The qcom convention is
++		 * ctl = 0x1000*pin (pin 0 = 0x400000), so 0x0 comes first; the
++		 * +0x1000 variant follows. 0x56000/0x57000 are GPIO86 either way.
++		 */
++		static const uint32_t cand[] = {
++			0x00000u, 0x01000u, 0x02000u, 0x03000u,
++			0x56000u, 0x57000u,
++		};
++		{
++			unsigned i;
++			for (i = 0; i < sizeof(cand) / sizeof(cand[0]); i++) {
++				printf("A05S TOUCH: rd %#x = %#x\n", cand[i],
++				    touch_rd(west, cand[i]));
++			}
++			rn.pin_after[0] = touch_rd(west, 0x00000u);
++			rn.pin_after[1] = touch_rd(west, 0x01000u);
++			rn.pin_after[2] = touch_rd(west, 0x02000u);
++			rn.pin_after[3] = touch_rd(west, 0x03000u);
  		}
 -		printf("A05S TOUCH: pins %#x %#x %#x %#x\n",
 -			rn.pin_after[0], rn.pin_after[1], rn.pin_after[2], rn.pin_after[3]);
@@ -46,14 +61,7 @@
 -		    touch_rd(west, TOUCH_GPIO_CFG(HX_GPIO_RST)),
 -		    touch_rd(west, TOUCH_GPIO_IO(HX_GPIO_RST)),
 -		    touch_rd(west, TOUCH_GPIO_CFG(TOUCH_PIN_IRQ)),
-+		printf("A05S TOUCH: gpio86 cfg=%#x\n",
-+		    touch_rd(west, TOUCH_GPIO_CFG(HX_GPIO_RST)));
-+		printf("A05S TOUCH: gpio86 io=%#x\n",
-+		    touch_rd(west, TOUCH_GPIO_IO(HX_GPIO_RST)));
-+		printf("A05S TOUCH: gpio80 cfg=%#x\n",
-+		    touch_rd(west, TOUCH_GPIO_CFG(TOUCH_PIN_IRQ)));
-+		printf("A05S TOUCH: gpio80 io=%#x\n",
- 		    touch_rd(west, TOUCH_GPIO_IO(TOUCH_PIN_IRQ)));
+-		    touch_rd(west, TOUCH_GPIO_IO(TOUCH_PIN_IRQ)));
 -		touch_mark("MARK pins read done\n");
  		printf("A05S TOUCH: pins done\n");
  	} else {
