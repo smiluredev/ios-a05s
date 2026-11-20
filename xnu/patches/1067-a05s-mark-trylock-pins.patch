@@ -1,0 +1,60 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -1005,19 +1005,12 @@
+ 	}
+ 	sweet_log_append(c, n);
+ 	/*
+-	 * Blocking flush (not the try-lock of sweet_log_sync): a breadcrumb that
+-	 * is dropped because the root filesystem happened to hold the controller
+-	 * is worse than a few milliseconds of waiting. Only the panic path keeps
+-	 * the try-lock.
++	 * Try-lock, never block: with the blocking lock the bw68 boot deadlocked
++	 * the root filesystem (its last breadcrumb was `MARK beat 9`, then the
++	 * whole system froze and the watchdog reset it). The console prints are
++	 * live again, so a dropped breadcrumb costs nothing.
+ 	 */
+-	if (su.writable && su.nblocks >= 2 * SWEET_LOG_BLOCKS) {
+-		lck_mtx_lock(&sweet_ufs_lock);
+-		uint64_t total = os_atomic_load(&sweet_log_total, relaxed);
+-		if (total != sweet_log_flushed) {
+-			(void)sweet_log_dump_locked(total);
+-		}
+-		lck_mtx_unlock(&sweet_ufs_lock);
+-	}
++	(void)sweet_log_sync();
+ }
+ 
+ static void
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -2619,18 +2619,22 @@
+ 		 * Nothing is written here: the reset line is shared with the
+ 		 * panel and pulsing it takes the display down.
+ 		 */
+-		touch_mark("MARK pins read\n");
++		/* one print per pin: the last line names the read that hangs */
++		for (unsigned p = 0; p < 4; p++) {
++			printf("A05S TOUCH: gpio%u cfg=%#x\n", p,
++			    touch_rd(west, TOUCH_GPIO_CFG(p)));
++		}
+ 		for (unsigned p = 0; p < 4; p++) {
+ 			rn.pin_after[p] = touch_rd(west, TOUCH_GPIO_CFG(p));
+ 		}
+-		printf("A05S TOUCH: pins %#x %#x %#x %#x\n",
+-			rn.pin_after[0], rn.pin_after[1], rn.pin_after[2], rn.pin_after[3]);
+-		printf("A05S TOUCH: rst86 cfg=%#x io=%#x irq80 cfg=%#x io=%#x\n",
+-		    touch_rd(west, TOUCH_GPIO_CFG(HX_GPIO_RST)),
+-		    touch_rd(west, TOUCH_GPIO_IO(HX_GPIO_RST)),
+-		    touch_rd(west, TOUCH_GPIO_CFG(TOUCH_PIN_IRQ)),
++		printf("A05S TOUCH: gpio86 cfg=%#x\n",
++		    touch_rd(west, TOUCH_GPIO_CFG(HX_GPIO_RST)));
++		printf("A05S TOUCH: gpio86 io=%#x\n",
++		    touch_rd(west, TOUCH_GPIO_IO(HX_GPIO_RST)));
++		printf("A05S TOUCH: gpio80 cfg=%#x\n",
++		    touch_rd(west, TOUCH_GPIO_CFG(TOUCH_PIN_IRQ)));
++		printf("A05S TOUCH: gpio80 io=%#x\n",
+ 		    touch_rd(west, TOUCH_GPIO_IO(TOUCH_PIN_IRQ)));
+-		touch_mark("MARK pins read done\n");
+ 		printf("A05S TOUCH: pins done\n");
+ 	} else {
+ 	rn.stage = "pins";
