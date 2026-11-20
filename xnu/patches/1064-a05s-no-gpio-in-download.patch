@@ -1,0 +1,54 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -204,6 +204,18 @@
+ touch_gpio(unsigned pin, unsigned mux, unsigned pull, unsigned drive, bool out, bool high)
+ {
+ 	vm_offset_t tile = touch_tile(pin);
++
++	/*
++	 * 1064: never touch the khaje TLMM from the a05s path. TOUCH_GPIO_CFG()
++	 * is one 0x1000 block early on this SoC (pin n is at (n+1)*0x1000, the
++	 * block header at 0x400000 is not readable), and any access here resets
++	 * the board — the bw64 boot died in the very first release write, and
++	 * himax_download() calls this again for its safe-mode retries. The
++	 * bootloader leaves the TDDI (and the panel) out of reset.
++	 */
++	if (a05s_touch) {
++		return;
++	}
+ 	uint32_t off = TOUCH_GPIO_CFG(pin);
+ 	uint32_t cfg = touch_rd(tile, off);
+ 	unsigned latch = a05s_touch ? 1u : 2u;
+@@ -1896,8 +1908,10 @@
+ 	int e;
+ 
+ 	printf("A05S TOUCH: fw download start\n");
++	touch_mark("MARK dl reset\n");
+ 	(void)himax_ahb_write(HX_SYSTEM_RESET, 0x00000055u);
+ 	touch_wait(20);
++	touch_mark("MARK dl sense off\n");
+ 	/* Vendor sense_off(): stop the FW, then enter safe mode. */
+ 	(void)himax_ahb_write(HX_CTRL_FW, 0x000000a5u);
+ 	touch_wait(20);
+@@ -1907,9 +1921,13 @@
+ 	 * pin-reset and retry. The old code sent 0x31 {0} here (the reset
+ 	 * sequence's second step), which exits the safe mode instead. */
+ 	for (i = 0; i < 5u; i++) {
++		char m[48];
+ 		bzero(v, sizeof(v));
++		touch_mark("MARK safe read\n");
+ 		(void)himax_ahb_read(HX_CHK_FW_STATUS, v, 4);
+ 		printf("A05S TOUCH: safe-mode state=%02x %02x\n", v[0], v[1]);
++		snprintf(m, sizeof(m), "MARK safe i=%u v=%02x %02x\n", i, v[0], v[1]);
++		touch_mark(m);
+ 		if (v[0] == 0x0cu) {
+ 			(void)himax_ahb_write(HX_TCON_ON_RST, 0);
+ 			touch_wait(1);
+@@ -1926,6 +1944,7 @@
+ 		touch_wait(20);
+ 	}
+ 	printf("A05S TOUCH: safe-mode done i=%u\n", i);
++	touch_mark("MARK safe done\n");
+ 	touch_wait(100);
+ 	{
+ 		uint8_t r[8];
