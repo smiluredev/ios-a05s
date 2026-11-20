@@ -1,0 +1,26 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -2401,10 +2401,14 @@
+ rain_touch_probe(void)
+ {
+ 	rn.stage = "map";
++	printf("A05S TOUCH: probe enter\n");
+ 	vm_offset_t gcc = ml_io_map(TOUCH_GCC_PA, 0x80000);
++	printf("A05S TOUCH: map gcc=%p\n", (void *)gcc);
+ 	vm_offset_t west = ml_io_map(a05s_touch ? TOUCH_TLMM_PA : TOUCH_WEST_PA,
+-	    a05s_touch ? 0x100000u : 0x58000u);
++	    a05s_touch ? 0x80000u : 0x58000u);
++	printf("A05S TOUCH: map west=%p\n", (void *)west);
+ 	rn.se = ml_io_map(RAIN_SE0_PA, 0x4000);
++	printf("A05S TOUCH: map se=%p\n", (void *)rn.se);
+ 	if (!gcc || !west || !rn.se) {
+ 		rn.err = -10;
+ 		return;
+@@ -2652,6 +2656,7 @@
+ 	(void)PE_parse_boot_argn("sweettouchdelay", &delay_s, sizeof(delay_s));
+ 	printf("SWEET TOUCH: starting in %u s\n", delay_s);
+ 	touch_wait(delay_s * 1000u);
++	printf("A05S TOUCH: delay done (%u s)\n", delay_s);
+ 	if (rain_touch_on) {
+ 		uint32_t stop = 0;
+ 		(void)PE_parse_boot_argn("raintouchpanic", &stop, sizeof(stop));
