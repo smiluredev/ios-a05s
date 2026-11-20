@@ -1,0 +1,49 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -1002,7 +1002,20 @@
+ 		return;
+ 	}
+ 	sweet_log_append(c, n);
+-	sweet_log_sync();
++	/*
++	 * Blocking flush (not the try-lock of sweet_log_sync): a breadcrumb that
++	 * is dropped because the root filesystem happened to hold the controller
++	 * is worse than a few milliseconds of waiting. Only the panic path keeps
++	 * the try-lock.
++	 */
++	if (su.writable && su.nblocks >= 2 * SWEET_LOG_BLOCKS) {
++		lck_mtx_lock(&sweet_ufs_lock);
++		uint64_t total = os_atomic_load(&sweet_log_total, relaxed);
++		if (total != sweet_log_flushed) {
++			(void)sweet_log_dump_locked(total);
++		}
++		lck_mtx_unlock(&sweet_ufs_lock);
++	}
+ }
+ 
+ static void
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -2751,8 +2751,22 @@
+ 	 * below hangs the SoC, the persistent log and the GUI got there first.
+ 	 */
+ 	(void)PE_parse_boot_argn("sweettouchdelay", &delay_s, sizeof(delay_s));
++	touch_mark("MARK arm\n");
+ 	printf("SWEET TOUCH: starting in %u s\n", delay_s);
+ 	touch_wait(delay_s * 1000u);
++	touch_mark("MARK wake\n");
++	/*
++	 * 1059: one breadcrumb per second for ten seconds, before touching any
++	 * hardware. If the SoC resets at the wake itself these stop immediately
++	 * and none of the bring-up below is to blame; if they keep coming, the
++	 * wake is fine and the reset happens further down.
++	 */
++	for (unsigned i = 1; i <= 10; i++) {
++		char b[32];
++		touch_wait(1000);
++		snprintf(b, sizeof(b), "MARK beat %u\n", i);
++		touch_mark(b);
++	}
+ 	touch_mark("MARK delay done\n");
+ 	printf("A05S TOUCH: delay done (%u s)\n", delay_s);
+ 	touch_sync();
