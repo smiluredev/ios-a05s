@@ -1,0 +1,55 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -2594,11 +2594,17 @@
+ 
+ 	rn.stage = "pins";
+ 	if (a05s_touch) {
+-		/* The bootloader already muxed GPIO0..3 to qup0; only observe. */
++		/*
++		 * The bootloader already muxed GPIO0..3 to qup0, so nothing here
++		 * needs to touch the TLMM. 1062 skips the observation reads: with
++		 * a single TLMM at 0x400000 the first read lands on the block
++		 * header (0x400000) and that read never returns, which is where
++		 * the bw62/bw63 boots stopped.
++		 */
+ 		for (unsigned p = 0; p < 4; p++) {
+-			rn.pin_after[p] = touch_rd(west, TOUCH_GPIO_CFG(p));
++			rn.pin_after[p] = 0;
+ 		}
+-			touch_mark("MARK pins read\n");
++			touch_mark("MARK pins skipped\n");
+ 		printf("A05S TOUCH: pins %#x %#x %#x %#x\n",
+ 			rn.pin_after[0], rn.pin_after[1], rn.pin_after[2], rn.pin_after[3]);
+ 	} else {
+@@ -2614,6 +2620,7 @@
+ 	}
+ 
+ 	rn.stage = "se0 spi init";
++	touch_mark("MARK se0 init\n");
+ 	if (!rg.mem) {
+ 	touch_wr(rn.se, 0xe18, 0);          /* no GSI */
+ 	touch_wr(rn.se, 0xe1c, 0);
+@@ -2646,6 +2653,7 @@
+ 	touch_wr(rn.se, 0x814, ((rn.hwrx >> 16) & 0x3fu) - 1u);
+ 	touch_wr(rn.se, SE_IRQ_EN, SE_EVENTS);
+ 	}
++	touch_mark("MARK se0 init done\n");
+ 	rn.c_mclk = touch_rd(rn.se, SE_MCLK);
+ 	rn.c_clksel = touch_rd(rn.se, SE_CLK_SEL);
+ 	rn.c_word = touch_rd(rn.se, RAIN_SPI_WORDLEN);
+@@ -2662,6 +2670,7 @@
+ 	rn.k_b144 = touch_rd(st.gcc, 0x1f144u);
+ 	rn.k_se2cmd = touch_rd(st.gcc, TOUCH_RCG);         /* topaz SE2, known good, read only */
+ 	rn.k_se2cfg = touch_rd(st.gcc, TOUCH_RCG + 4u);
++	touch_mark("MARK se0 readback done\n");
+ 
+ 	if (rg.mem) {
+ 		static const uint8_t pat[8] = { 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88 };
+@@ -2671,6 +2680,7 @@
+ 		rg.loopback = false;
+ 	}
+ 	if (a05s_touch) {
++		touch_mark("MARK bringup\n");
+ 		a05s_touch_bringup();
+ 		return;
+ 	}
