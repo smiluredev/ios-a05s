@@ -1,0 +1,188 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -982,6 +982,29 @@
+ 	sweet_log_sync();
+ }
+ 
++/*
++ * Write a line straight into the persistent log, bypassing the console.
++ * printf() goes through the console lock and the console driver, and on this
++ * port a print from the touch thread stops every console line in the kernel
++ * (the ring stops while the USB stack still answers), so a driver that wants
++ * to be seen must not depend on it. sweet_log_mark() appends and syncs
++ * immediately.
++ */
++void
++sweet_log_mark(const char *c)
++{
++	int n = 0;
++
++	while (c[n] != '\0' && n < 240) {
++		n++;
++	}
++	if (n == 0) {
++		return;
++	}
++	sweet_log_append(c, n);
++	sweet_log_sync();
++}
++
+ static void
+ sweet_log_thread(__unused void *arg, __unused wait_result_t wr)
+ {
+@@ -1003,6 +1026,17 @@
+ 			printf("SWEET LOG: write failed (%d) at %llu, retrying\n", error,
+ 			    (unsigned long long)total);
+ 			(void)tsleep(&sweet_log_chan, PZERO, "sweetlogfail", hz);
++			continue;
++		}
++		/*
++		 * Liveness mark in the ring itself (not on the console): if the
++		 * console dies but the kernel runs, these keep appearing.
++		 */
++		char hb[48];
++		int n = snprintf(hb, sizeof(hb), "SLOG %llu %llu\n",
++		    (unsigned long long)sweet_log_seq, (unsigned long long)total);
++		if (n > 0) {
++			sweet_log_append(hb, n);
+ 		}
+ 	}
+ }
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -42,6 +42,8 @@
+  * one, is lost. Call this after printing, before touching hardware.
+  */
+ extern void sweet_log_sync(void);
++/* Append a line to the persistent log without using the console. */
++extern void sweet_log_mark(const char *);
+ 
+ static void
+ touch_sync(void)
+@@ -49,6 +51,18 @@
+ 	sweet_log_sync();
+ }
+ 
++/*
++ * Breadcrumb before a step that may take the SoC down. printf() depends on
++ * the console, which on this port stops taking output as soon as the touch
++ * thread prints, so the breadcrumb is written straight to the persistent log
++ * (UFS) first; the printf that follows may or may not survive.
++ */
++static void
++touch_mark(const char *s)
++{
++	sweet_log_mark(s);
++}
++
+ #define TOUCH_SE_PA      0x04a88000u /* QUP0 SE2 */
+ #define TOUCH_GCC_PA     0x01400000u
+ #define TOUCH_WEST_PA    0x00500000u /* TLMM 0x400000 + WEST tile: GPIO 6/7/80/86 */
+@@ -152,6 +166,7 @@
+ 			(unsigned long long)deadline, aw);
+ 	thread_block(THREAD_CONTINUE_NULL);
+ 	if (ms >= 1000u) {
++		sweet_log_mark("MARK wake\n");
+ 		printf("A05S TOUCH: wait woke %u ms\n", ms);
+ 		touch_sync();
+ 	}
+@@ -2166,6 +2181,7 @@
+ {
+ 	/* GPIO36 is the haptic enable, not TDDI AVDD; poking it here hung the
+ 	 * SoC at bring-up (1044). The TDDI rails are left on by the bootloader. */
++	touch_mark("MARK bringup start\n");
+ 	printf("A05S TOUCH: bringup start\n");
+ 	touch_sync();
+ 	uint8_t buf[HX_REPORT_SZ];
+@@ -2174,12 +2190,14 @@
+ 	bzero(buf, sizeof(buf));
+ 
+ 	rn.stage = "himax reset";
++	touch_mark("MARK bringup pins\n");
+ 	printf("A05S TOUCH: pins=%#x %#x %#x %#x\n",
+ 	    rn.pin_after[0], rn.pin_after[1], rn.pin_after[2], rn.pin_after[3]);
+ 	touch_sync();
+ 	{
+ 		static const uint8_t pat[8] = { 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88 };
+ 		uint8_t lb[8];
++		touch_mark("MARK loopback\n");
+ 		touch_wr(rn.se, RAIN_SPI_LOOPBACK, 1);
+ 		int le = rain_spi(RAIN_OP_FULL, pat, lb, sizeof(pat));
+ 		touch_wr(rn.se, RAIN_SPI_LOOPBACK, 0);
+@@ -2190,10 +2208,12 @@
+ 	/* TDDI: GPIO86 is the shared panel+touch reset. Pulsing it low once the
+ 	 * DSI panel is up kills the display and the watchdog resets the SoC
+ 	 * (1051 boot loop). Only make sure the line is released. */
++	touch_mark("MARK reset release\n");
+ 	printf("A05S TOUCH: reset release\n");
+ 	touch_sync();
+ 	touch_gpio(HX_GPIO_RST, 0, 0, 2, true, true);
+ 	touch_wait(100);
++	touch_mark("MARK rst cfg\n");
+ 	printf("A05S TOUCH: rst cfg=%#x io=%#x\n",
+ 	    touch_rd(st.west, TOUCH_GPIO_CFG(HX_GPIO_RST)),
+ 	    touch_rd(st.west, TOUCH_GPIO_IO(HX_GPIO_RST)));
+@@ -2201,14 +2221,17 @@
+ 	printf("A05S TOUCH: se0 fw=%#x ifdis=%#x hwtx=%#x hwrx=%#x gpi=%d cpha=%#x cpol=%#x demux=%#x mclk=%#x\n",
+ 	    rn.fw, rn.ifdis, rn.hwtx, rn.hwrx, rg.mem != 0, rn.c_cpha, rn.c_cpol, rn.c_demux, rn.c_mclk);
+ 	touch_sync();
++	touch_mark("MARK charger\n");
+ 	printf("A05S TOUCH: charger enable\n");
+ 	touch_sync();
+ 	(void)sweet_a05s_charger_enable();
+ 	printf("A05S TOUCH: charger enable done\n");
+ 	touch_sync();
++	touch_mark("MARK fw map\n");
+ 	printf("A05S TOUCH: fw map\n");
+ 	touch_sync();
+ 	if (himax_fw_map() == 0) {
++		touch_mark("MARK fw prepare\n");
+ 		printf("A05S TOUCH: fw prepare\n");
+ 		touch_sync();
+ 		if (himax_fw_prepare() == 0) {
+@@ -2451,14 +2474,18 @@
+ rain_touch_probe(void)
+ {
+ 	rn.stage = "map";
++	touch_mark("MARK probe enter\n");
+ 	printf("A05S TOUCH: probe enter\n");
++	touch_mark("MARK map gcc\n");
+ 	vm_offset_t gcc = ml_io_map(TOUCH_GCC_PA, 0x80000);
+ 	printf("A05S TOUCH: map gcc=%p\n", (void *)gcc);
+ 	touch_sync();
++	touch_mark("MARK map west\n");
+ 	vm_offset_t west = ml_io_map(a05s_touch ? TOUCH_TLMM_PA : TOUCH_WEST_PA,
+ 	    a05s_touch ? 0x80000u : 0x58000u);
+ 	printf("A05S TOUCH: map west=%p\n", (void *)west);
+ 	touch_sync();
++	touch_mark("MARK map se\n");
+ 	rn.se = ml_io_map(RAIN_SE0_PA, 0x4000);
+ 	printf("A05S TOUCH: map se=%p\n", (void *)rn.se);
+ 	touch_sync();
+@@ -2472,8 +2499,10 @@
+ 		st.east = west;   /* khaje: one TLMM */
+ 	printf("A05S TOUCH: probe map gcc=%p west=%p se=%p\n",
+ 		(void *)gcc, (void *)west, (void *)rn.se);
++	touch_mark("MARK maps ok\n");
+ 
+ 	rn.stage = "clocks";
++	touch_mark("MARK clocks\n");
+ 	touch_wr(gcc, TOUCH_GCC_VOTE, touch_rd(gcc, TOUCH_GCC_VOTE) | RAIN_GCC_VOTE_SE0);
+ 	rn.vote = touch_rd(gcc, TOUCH_GCC_VOTE);
+ 	touch_wr(gcc, RAIN_RCG_SE0 + 4u, 1u);               /* XO, divider 1: 19.2 MHz */
+@@ -2521,6 +2550,7 @@
+ 		for (unsigned p = 0; p < 4; p++) {
+ 			rn.pin_after[p] = touch_rd(west, TOUCH_GPIO_CFG(p));
+ 		}
++			touch_mark("MARK pins read\n");
+ 		printf("A05S TOUCH: pins %#x %#x %#x %#x\n",
+ 			rn.pin_after[0], rn.pin_after[1], rn.pin_after[2], rn.pin_after[3]);
+ 	} else {
+@@ -2709,6 +2739,7 @@
+ 	(void)PE_parse_boot_argn("sweettouchdelay", &delay_s, sizeof(delay_s));
+ 	printf("SWEET TOUCH: starting in %u s\n", delay_s);
+ 	touch_wait(delay_s * 1000u);
++	touch_mark("MARK delay done\n");
+ 	printf("A05S TOUCH: delay done (%u s)\n", delay_s);
+ 	touch_sync();
+ 	if (rain_touch_on) {
