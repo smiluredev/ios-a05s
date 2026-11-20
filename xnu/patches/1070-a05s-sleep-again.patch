@@ -1,0 +1,11 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -122,6 +122,8 @@
+ #define SE_PACK0        0x0007f8feu
+ #define SE_PACK1        0x000ffefeu
+ 
++static int touch_sleep_chan;
++
+ static struct {
+ 	vm_offset_t se, gcc, west, east;
+ 	bool started, dead, probing;
