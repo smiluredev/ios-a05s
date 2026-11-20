@@ -1,0 +1,30 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -26,15 +26,6 @@
+ #include <pexpert/device_tree.h>
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+-
+-/*
+- * 1058: every printf() from this thread (after the sweettouchdelay wake)
+- * stops the console for the whole kernel and the SoC resets a few seconds
+- * later. The persistent log (sweet_log_mark, which does not touch the
+- * console) is the safe sink, so silence the console here: the breadcrumbs
+- * say which step ran.
+- */
+-#define printf(...) do { } while (0)
+ /* Mach MIG declaration is not included by BSD's exported thread.h. */
+ extern kern_return_t thread_terminate(thread_t);
+ extern int sweet_rpmh_vreg_enable(const char *res, unsigned mv);
+@@ -2319,10 +2310,7 @@
+ 		}
+ 		/* 1063: a05s_ident() bit-bangs GPIO0..3 through the TLMM (wrong
+ 		 * block on khaje, resets the board); it was a diagnostic only. */
+-		if (tick % 10u == 0u) {
+-			printf("A05S ID: tick=%u irq=%u\n", tick,
+-			    touch_rd(st.west, TOUCH_GPIO_IO(TOUCH_PIN_IRQ)) & 1u);
+-		}
++		/* the tick line is gone: it read the TLMM (fatal on khaje) */
+ 		if (rain_panel_off) {
+ 			touch_report(0, st.x, st.y);
+ 			touch_wait(50);
