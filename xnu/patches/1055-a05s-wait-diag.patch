@@ -1,0 +1,17 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -131,8 +131,13 @@
+ {
+ 	uint64_t deadline;
+ 	clock_interval_to_deadline(ms, NSEC_PER_MSEC, &deadline);
+-	(void)assert_wait_deadline(&touch_sleep_chan, THREAD_UNINT, deadline);
++	boolean_t aw = assert_wait_deadline(&touch_sleep_chan, THREAD_UNINT, deadline);
++	if (ms >= 1000u)
++		printf("A05S TOUCH: wait %u ms dl=%llu aw=%d\n", ms,
++			(unsigned long long)deadline, aw);
+ 	thread_block(THREAD_CONTINUE_NULL);
++	if (ms >= 1000u)
++		printf("A05S TOUCH: wait woke %u ms\n", ms);
+ }
+ 
+ static bool
