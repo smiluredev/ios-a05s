@@ -1,0 +1,11 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -2389,7 +2389,7 @@
+ 	touch_wr(rn.se, SE_CLK_SEL, 0);
+ 	touch_wr(rn.se, SE_MCLK, ((a05s_touch ? 2u : 16u) << 4) | 1u); /* 19.2 MHz / div */
+ 	touch_wr(rn.se, RAIN_SPI_CPHA, a05s_touch ? 1u : 0u); /* a05s: CPHA=1, rain: mode 0 */
+-	touch_wr(rn.se, RAIN_SPI_CPOL, a05s_touch ? 4u : 0u); /* a05s: SPI_MODE_3, CPOL is bit 2 */
++	touch_wr(rn.se, RAIN_SPI_CPOL, 0u); /* a05s: DT has only spi-cpha -> SPI mode 1 (CPOL=0) */
+ 	touch_wr(rn.se, RAIN_SPI_LOOPBACK, 0);
+ 	touch_wr(rn.se, RAIN_SPI_DEMUXSEL, a05s_touch ? 2u : 0u); /* a05s: CS2, rain: CS0 */
+ 	touch_wr(rn.se, RAIN_SPI_DEMUXINV, 0);
